@@ -1,5 +1,9 @@
 {
     "idf.adapterTargetName": "esp32s3",
     "idf.portWin": "COM3",
-    "idf.flashType": "UART"
+    "idf.flashType": "UART",
+    "files.associations": {
+        "task.h": "c"
+    },
+    "idf.port": "/dev/cu.wchusbserial56F20457811"
 }
