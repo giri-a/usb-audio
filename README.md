@@ -33,3 +33,16 @@ Below is short explanation of remaining files in the project folder.
 ```
 Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
 They are not used or needed when building with CMake and idf.py.
+
+## settings.json
+
+I work on Mac as well as Windows10 machine and use vscode to develop this code.
+Right settings.json is required to seamlessly move between the platforms.
+See https://code.visualstudio.com/docs/getstarted/settings#_settings-precedence
+
+The settings for ESP-IDF containing ESP_IDF and ESP_IDF_TOOLS paths and python
+environment should be local to the platform specific installations (therefore
+not part of this repo).
+
+Only certain things like the idfTarget, idfPort etc. are project specific and
+that should be stored in .vscode/settings.json and is part of the repo. 

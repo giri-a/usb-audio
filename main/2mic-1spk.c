@@ -1,7 +1,6 @@
-/* SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+/*
+ * Adapted from skainet code : 
+*/
 #include <string.h>
 #include <math.h>
 #include <sys/time.h>
@@ -258,17 +257,21 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
  For faster settling of offset value, FILTER_RESPONSE_MULTIPLIER may be increased.
  The equivalent time constant (RC) = SAMPLING_PERIOD*2^(32-MIC_RESOLUTION-FILTER_RESPONSE_MULTIPLIER)
  For example, for fs=16kHz, MIC_RESOLUTION=18, and FILTER_RESPONSE_MULTIPLIER=0, 
- the time constant is 2^14/16000 ~= 1 second. Note that the reduction is time constant
+ the time constant is 2^14/16000 ~= 1 second. Note that the reduction in time constant
  is in power of 2 for every increase in FILTER_RESPONSE_MULTIPLIER.
 
 */
 #define  FILTER_RESPONSE_MULTIPLIER 2
-void offset_canceller(int32_t *left_sample_p, int32_t *right_sample_p)
+void offset_canceller(int32_t *left_sample_p, int32_t *right_sample_p, bool reset)
 {
-    static int32_t l_offset = 0;
-    static int32_t r_offset = 0;
+    static int32_t l_offset = 0;  // offset for L channel; (state of the filter)
+    static int32_t r_offset = 0;  // offset for R channel; (state of the filter)
     int32_t final_value;
 
+    if(reset){
+        l_offset = 0;
+        r_offset = 0;
+    }
     if(left_sample_p != NULL)
     {
         if((*left_sample_p >> (32-MIC_RESOLUTION))> 32767 || (*left_sample_p >> (32 - MIC_RESOLUTION))< -32768){
@@ -329,7 +332,7 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 
         val += OFFSET;
         val <<= (32-MIC_RESOLUTION);
-        offset_canceller(&val, NULL);
+        offset_canceller(&val, NULL, false);
 
         // left and right channels are being given the same values
         *(data_buf+i)   = val;
@@ -375,7 +378,7 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
                 if((n_bytes - j) >= 8) {
                     memcpy(&d_left,(rx_sample_buf+j),4);
                     memcpy(&d_right,(rx_sample_buf+j+4),4);
-                    offset_canceller(&d_left, &d_right);
+                    offset_canceller(&d_left, &d_right, false);
                     d_left <<= GAIN; d_right <<= GAIN;
                     *(data_buf+i)   = d_left;
                     *(data_buf+i+1) = d_right;
