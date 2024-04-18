@@ -3,7 +3,20 @@
     "idf.portWin": "COM3",
     "idf.flashType": "UART",
     "files.associations": {
-        "task.h": "c"
+        "task.h": "c",
+        "esp_err.h": "c",
+        "usb_descriptors.h": "c",
+        "esp_log.h": "c",
+        "i2s_std.h": "c",
+        "i2s.h": "c",
+        "sdkconfig.h": "c",
+        "esp_compiler.h": "c",
+        "tusb.h": "c",
+        "tusb_common.h": "c",
+        "esp_idf_version.h": "c",
+        "tusb_config.h": "c",
+        "i2s_functions.h": "c"
     },
-    "idf.port": "/dev/cu.wchusbserial56F20457811"
+    "idf.port": "/dev/cu.wchusbserial56F20457811",
+    "idf.gitPath": "git"
 }

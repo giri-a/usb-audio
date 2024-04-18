@@ -46,3 +46,7 @@ not part of this repo).
 
 Only certain things like the idfTarget, idfPort etc. are project specific and
 that should be stored in .vscode/settings.json and is part of the repo. 
+
+Note that everytime ESP-IDF is configured, it updates .vscode/seetings.json with the platform-specific settings.
+
+.vscode/c_cpp_properties.json is manually edited to include two configurations with names ESP-IDF(Mac) and ESP-IDF(Win). Configuring through command panel, will create one with platform specific paths; manual edit was required to combine the two under different names. Based on the platform you are working on, choose the appropriate configuration by clicking on the configuration (at the very right end) on the status bar of vscode.
