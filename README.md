@@ -50,3 +50,9 @@ that should be stored in .vscode/settings.json and is part of the repo.
 Note that everytime ESP-IDF is configured, it updates .vscode/seetings.json with the platform-specific settings.
 
 .vscode/c_cpp_properties.json is manually edited to include two configurations with names ESP-IDF(Mac) and ESP-IDF(Win). Configuring through command panel, will create one with platform specific paths; manual edit was required to combine the two under different names. Based on the platform you are working on, choose the appropriate configuration by clicking on the configuration (at the very right end) on the status bar of vscode.
+
+## CMake
+Sometimes the settings get all messed up and/or cmake makes it so. It cannot find IDF_PATH variable. For this reason and also to be able to run idf.py from command line it is advisable to add the tools path to system PATH variable. The instructions are at this link.
+https://docs.espressif.com/projects/esp-idf/en/v3.3/get-started-cmake/add-idf_path-to-profile.html
+
+However, it seems that I ran into this problem since I clicked on a prompt in VSCODE to run cmake at every startup. Once I disabled it in settings, the build seemed to happen just fine. 

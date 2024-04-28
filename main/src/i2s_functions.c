@@ -18,20 +18,19 @@ static i2s_chan_handle_t                tx_handle = NULL;        // I2S tx chann
 static i2s_chan_handle_t                rx_handle = NULL;        // I2S rx channel handler
 #endif
 
-#define I2S_GPIO_WS      GPIO_NUM_36
-#define I2S_GPIO_DIN     GPIO_NUM_37
-#define I2S_GPIO_DOUT    GPIO_NUM_35
-#define I2S_GPIO_BCLK    GPIO_NUM_38
+#define I2S_GPIO_DOUT    GPIO_NUM_14
+#define I2S_GPIO_DIN     GPIO_NUM_15
+#define I2S_GPIO_WS      GPIO_NUM_16
+#define I2S_GPIO_BCLK    GPIO_NUM_17
 
 // Current resolution, update on format change
 extern uint8_t current_resolution;
-extern size_t  data_in_buf_cnt = 0;   // value is set based on sample rate etc. when the i2s is configured 
+size_t  data_in_buf_cnt = 0;   // value is set based on sample rate etc. when the i2s is configured 
 
 /*raw buffer to read data from I2S dma buffers*/
 static char rx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
 static size_t  rx_sample_buflen = 0;// value is set based on sample rate etc. when the i2s is configured 
 
-static char tx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ];
 
 esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate)
 {
@@ -163,7 +162,7 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
 
 
 #define MIC_RESOLUTION      18
-#define GAIN                0      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
+#define GAIN                2      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
 
 /*
  This filter is an implementation of a 1st-order filter described in 
@@ -180,6 +179,7 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
 
 */
 #define  FILTER_RESPONSE_MULTIPLIER 2
+#define  BIT_MASK ((0xFFFFFFFFUL)<<(32-MIC_RESOLUTION))
 void offset_canceller(int32_t *left_sample_p, int32_t *right_sample_p, bool reset)
 {
     static int32_t l_offset = 0;  // offset for L channel; (state of the filter)
@@ -195,7 +195,8 @@ void offset_canceller(int32_t *left_sample_p, int32_t *right_sample_p, bool rese
         if((*left_sample_p >> (32-MIC_RESOLUTION))> 32767 || (*left_sample_p >> (32 - MIC_RESOLUTION))< -32768){
             printf("left sample clips before offset\n");
         }
-        final_value = *left_sample_p - (l_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
+        //final_value = *left_sample_p - (l_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
+        final_value = *left_sample_p - (l_offset & BIT_MASK);
         *left_sample_p = (final_value >> (32-MIC_RESOLUTION));
         l_offset += (*left_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
@@ -209,7 +210,8 @@ void offset_canceller(int32_t *left_sample_p, int32_t *right_sample_p, bool rese
         if((*right_sample_p >> (32-MIC_RESOLUTION))> 32767 || (*right_sample_p >> (32 - MIC_RESOLUTION))< -32768){
             printf("right sample clips before offset\n");
         }
-        final_value = *right_sample_p - (r_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
+        //final_value = *right_sample_p - (r_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
+        final_value = *right_sample_p - (r_offset & BIT_MASK);
         *right_sample_p = (final_value >> (32-MIC_RESOLUTION));
         r_offset += (*right_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
@@ -323,56 +325,53 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 
 /*
   This function is called by tud_audio_rx_done_pre_read_cb() providing the data read from
-  EP_OUT buffer in data_buf. The number of bytes in the data_buf is count (so count/2 int16_t type).
-  This function formats the data (16 bits to MSB aligned 32 bits etc..) and writes to the 
-  I2S DMA buffer to be sent out over I2S.
+  EP_OUT buffer in data_buf. The number of uint16_t valid elements in the data_buf is count.
+  This function formats the data (16 bits to MSB aligned 32 bits etc..) using a local buffer
+  tx_sample_buf and writes to the I2S DMA buffer to be sent out over I2S.
+  Each sample in tx_sample_buf is int32_t type. Since it holds samples for L and R channels, 
+  count number of mono samples from data_buf requires tx_sample_buf to be 2*count long. 
+  Max val of count is CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ/2 (see uad_callbacks.c).
 */
-void bsp_i2s_write(uint16_t *data_buf, size_t count){
-    static int total_items_to_print = 8192;
-    int j=0;
-    static int i = 0;
-    size_t n_bytes = 0;
-    //if(total_items_to_print ==0){
-    //    for(i=0,j=0;i<8192;i++,j++) {
-    //        printf("%d,",data_dump[i]); j++;
-    //        if(j==10){
-    //            printf("\n");
-    //            j = 0;
-    //        }
-    //    }
-    //    i = 0;
-    //total_items_to_print = 8192;
-    //}
-    // convert 16 bits to 32 bits
+void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
+    //return;
+    /* each sample is 32bits and there are 2 channels; so a EP buffer of CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ (N) 
+     * bytes (each data is 16bits) will produce (N/2)*2=N 32bits total o/p samples for L+R  
+     */
+
+    static int32_t tx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ];
+
+    int16_t *src   = (int16_t*)data_buf;
+    int16_t *limit = (int16_t*)data_buf + n_bytes/2 ;
+    int32_t *dst   = tx_sample_buf;
+
+    size_t num_bytes = 0;
+
+    // convert 16 bits to 32 bits (MSB aligned)
+    assert(current_resolution == 16);
     if (current_resolution == 16)
     {
-      int16_t *src   = (int16_t*)data_buf;
-      int16_t *limit = (int16_t*)data_buf + count / 2;
-      int32_t *dst   = (int32_t*)tx_sample_buf;
       while (src < limit)
       {
-    //    data_dump[i++] = *src;
-    //    total_items_to_print--;
-        int32_t data = (*src++) << (32-MIC_RESOLUTION-1); 
+        int32_t data = (int32_t)(int16_t)(*src++)<<16;  // MSB aligning
         *dst++ = data;
         if(/*single channel*/ true)
             // copy the same data to both channels. NOTE This will depend on how the speaker is wired to I2S bus
             *dst++ = data;
       }
+      assert(dst <= &tx_sample_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ-1]);
       // total number of bytes in tx_sample_buf is count*4 since each 16bit sample in data_buf
       // made into a 32bit value and then replicated in both left and right channel.
-      assert(i2s_channel_write(tx_handle,tx_sample_buf, count*4, &n_bytes, 200) == ESP_OK) ;
+      assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*4, &num_bytes, 200) == ESP_OK) ;
     }
     else if (current_resolution == 24)
     {
-      int32_t *src   = (int16_t*)data_buf;
-      int32_t *limit = (int16_t*)data_buf + count / 4;
-      int32_t *dst   = (int32_t*)tx_sample_buf;
+    /*
       while (src < limit)
       {
         *dst++ = *src++;
       }
-      assert(i2s_channel_write(tx_handle,tx_sample_buf, count, &n_bytes, 200) == ESP_OK) ;
+      assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*2, &num_bytes, 200) == ESP_OK) ;
+    */
     }
 
 }

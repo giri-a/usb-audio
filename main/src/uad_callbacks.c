@@ -32,9 +32,10 @@ uint32_t blink_interval_ms = BLINK_NOT_MOUNTED;
 extern size_t  data_in_buf_cnt ;      // value is set based on sample rate etc. when the i2s is configured 
 static uint16_t data_in_buf[CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX/ 2];
 
-static uint16_t data_out_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / 2];
+static uint16_t data_out_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / 2 ];
+
 // Speaker data size received in the last frame
-static size_t data_out_buf_cnt = 0;
+static uint16_t data_out_buf_cnt = 0;
 
 
 // Audio controls
@@ -46,7 +47,7 @@ uint8_t clkValid;
 
 // Range states
 // List of supported sample rates
-extern const uint32_t sampleRatesList[] =
+const uint32_t sampleRatesList[] =
 {
     16000, 24000, 32000, 48000
 };
@@ -353,10 +354,28 @@ bool tud_audio_rx_done_pre_read_cb(uint8_t rhport, uint16_t n_bytes_received, ui
   (void)func_id;
   (void)ep_out;
   (void)cur_alt_setting;
-
-  data_out_buf_cnt = tud_audio_read(data_out_buf, n_bytes_received);
+  //printf("pre: nb: %d ",n_bytes_received);
   bsp_i2s_write(data_out_buf, data_out_buf_cnt);
 
+  return true;
+}
+
+bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id, uint8_t ep_out, uint8_t cur_alt_setting)
+{
+  (void)rhport;
+  (void)func_id;
+  (void)ep_out;
+  (void)cur_alt_setting;
+
+    static int i=0;
+    if(i++ % 100 == 0) {printf(".");fflush(stdout);}
+    if(i % 6000  == 0) {printf("\n");fflush(stdout);}
+
+  // tud_audio_read returns number of bytes read into the buffer
+  data_out_buf_cnt = tud_audio_read(data_out_buf, (sizeof(data_out_buf)));
+  assert(n_bytes_received == data_out_buf_cnt);
+
+  //printf("post: nb: %d db: %d\n",n_bytes_received,data_out_buf_cnt);
   return true;
 }
 
@@ -381,19 +400,9 @@ bool tud_audio_tx_done_post_load_cb(uint8_t rhport, uint16_t n_bytes_copied, uin
     (void) ep_in;
     (void) cur_alt_setting;
 
-    //static int64_t t_earlier = 0;
-    //struct timeval tv_now;
-    //gettimeofday(&tv_now, NULL);
-    //int64_t t_now = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
-
-    /*** Here to fill audio buffer, only use in audio transmission begin ***/
-    //n_bytes = rb_read(rb_debug, (char *)data_in_buf, i2s_read_buflen, 100) ;
 
     TU_ASSERT(bsp_i2s_read(data_in_buf, data_in_buf_cnt) == data_in_buf_cnt ) ;
 
-    //delta_times[i].delta_time = t_now - t_earlier;
-
-    //t_earlier = t_now;
     return true;
 }
 
@@ -418,6 +427,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
   uint8_t const alt = tu_u16_low(tu_le16toh(p_request->wValue));
 
   TU_LOG2("Set interface %d alt %d\r\n", itf, alt);
+  printf("Set interface %d alt %d\r\n", itf, alt);
   if (ITF_NUM_AUDIO_STREAMING_SPK == itf && alt != 0)
       blink_interval_ms = BLINK_STREAMING;
 
@@ -426,6 +436,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
   if(alt != 0)
   {
     current_resolution = resolutions_per_format[alt-1];
+    printf("  Current resolution is %d bits\r\n", current_resolution);
   }
 
   return true;
