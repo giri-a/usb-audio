@@ -5,6 +5,9 @@
 #include "tusb.h"
 #include "tusb_config.h"
 
+
+extern void toggle_gpio();
+
 //#define DUMMY_I2S 1
 
 
@@ -340,6 +343,9 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
 
     static int32_t tx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ];
 
+    //toggle_gpio();
+    gpio_set_level(GPIO_NUM_12, 0);
+
     int16_t *src   = (int16_t*)data_buf;
     int16_t *limit = (int16_t*)data_buf + n_bytes/2 ;
     int32_t *dst   = tx_sample_buf;
@@ -373,5 +379,6 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
       assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*2, &num_bytes, 200) == ESP_OK) ;
     */
     }
+    gpio_set_level(GPIO_NUM_12, 1);
 
 }

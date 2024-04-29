@@ -10,6 +10,7 @@
 #include "esp_private/usb_phy.h"
 #include "esp_err.h"
 #include "i2s_functions.h"
+#include "driver/gpio.h"
 
 void configure_led(void);
 void led_blinking_task(void);
@@ -46,6 +47,34 @@ typedef struct {
 } data_read_times_t;
 data_read_times_t delta_times[100];
 */
+#define TOGGLE_GPIO GPIO_NUM_13
+//#define GPIO_OUTPUT_PIN_SEL  (1ULL<<TOGGLE_GPIO)
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_NUM_11) |(1ULL<<GPIO_NUM_12) |(1ULL<<GPIO_NUM_13) )
+
+void init_gpio()
+{
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    //disable pull-down mode
+    io_conf.pull_down_en = 0;
+    //disable pull-up mode
+    io_conf.pull_up_en = 0;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+}
+void toggle_gpio()
+{
+    static bool flag = false;
+
+    gpio_set_level(TOGGLE_GPIO, flag?1:0);
+    flag = !flag;
+}
 
 static usb_phy_handle_t phy_hdl;
 static void usb_phy_init(void)
@@ -71,20 +100,24 @@ void usb_device_task(void *param)
     // RTOS forever loop
     while (1) {
         // tinyusb device task
+    gpio_set_level(GPIO_NUM_11, 0);
         tud_task();
+    gpio_set_level(GPIO_NUM_11, 1);
     }
     vTaskDelete(NULL);
 }
 
-
 void app_main()
 {
+    init_gpio();
+
     usb_phy_init();
 
     sampFreq = sampleRatesList[0];
     clkValid = 1;
 
     ESP_ERROR_CHECK(bsp_i2s_init(I2S_NUM_1, sampFreq));
+
 
     // Create a task for tinyusb device stack
 
