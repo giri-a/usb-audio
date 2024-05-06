@@ -54,7 +54,8 @@ uint8_t const *tud_descriptor_device_cb(void)
 // Configuration Descriptor
 //--------------------------------------------------------------------+
 
-#define CONFIG_TOTAL_LEN        (TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN)
+//#define CONFIG_TOTAL_LEN        (TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN)
+#define CONFIG_TOTAL_LEN        (TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * CFG_TUD_AUDIO_FUNC_1_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -89,8 +90,32 @@ uint8_t const desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
     // Interface number, string index, EP Out & EP In address, EP size
-    TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(2, EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN | 0x80)
+    TUD_AUDIO_HEADSET_STEREO_16_DESCRIPTOR(2, EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN | 0x80)
 
+};
+
+uint8_t const desc_configuration_1[] = {
+    // Config number, Interface count, string index, total length, attribute, power in mA
+    TUD_CONFIG_DESCRIPTOR(1, 2, 0, (TUD_CONFIG_DESC_LEN+TUD_AUDIO_SPK_TWO_CH_DESC_LEN), 0x00, 100),
+
+    // (_itfnum, _stridx, _nBytesPerSample, _nBitsUsedPerSample, _epout, _epsize) 
+    TUD_AUDIO_SPK_TWO_CH_DESCRIPTOR(/* _itfnum */ 0,\
+                                    /* _stridx */ 4, \
+                                    /* _nBytesPerSample */ CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, \
+                                    /* _nBitsUsedPerSample */ CFG_TUD_AUDIO_FUNC_1_FORMAT_1_RESOLUTION_RX, \
+                                    /* _epout */ EPNUM_AUDIO_OUT, \
+                                    /* _epsize */ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX))
+
+    };
+uint8_t const desc_configuration_2[] = {
+    TUD_CONFIG_DESCRIPTOR(2, 2, 0, (TUD_CONFIG_DESC_LEN+TUD_AUDIO_MIC_TWO_CH_DESC_LEN), 0x00, 100),
+    // Two channel Mic (_itfnum, _stridx, _nBytesPerSample, _nBitsUsedPerSample, _epin, _epsize) 
+    TUD_AUDIO_MIC_TWO_CH_DESCRIPTOR(/* _itfnum */ 0,\
+                                    /* _stridx */ 5, \
+                                    /* _nBytesPerSample */ CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, \
+                                    /* _nBitsUsedPerSample */ CFG_TUD_AUDIO_FUNC_1_FORMAT_1_RESOLUTION_RX, \
+                                    /* _epin */ EPNUM_AUDIO_IN | 0x80, \
+                                    /* _epsize */ TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX))
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -101,6 +126,10 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
     (void) index; // for multiple configurations
     //printf("%s: CONFIG_TOTAL_LEN:%d\n",__func__,CONFIG_TOTAL_LEN);
     return desc_configuration;
+    //if(index ==0 )
+    //return desc_configuration_1;
+    //else
+    //return desc_configuration_2;
 }
 
 //--------------------------------------------------------------------+

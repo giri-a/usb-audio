@@ -25,6 +25,8 @@ enum  {
   BLINK_SUSPENDED = 2500,
 };
 
+#define TU_LOG2 printf
+
 uint32_t blink_interval_ms = BLINK_NOT_MOUNTED;
 
 /* data_in_buf is populated in tud_audio_tx_done_post_load_cb() from the circular buffer */
@@ -42,15 +44,16 @@ static uint16_t data_out_buf_cnt = 0;
 // Current states
 bool mute[CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX + 1];                                      // +1 for master channel 0
 uint16_t volume[CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX + 1];                                // +1 for master channel 0
-uint32_t sampFreq;
-uint8_t clkValid;
 
 // Range states
 // List of supported sample rates
 const uint32_t sampleRatesList[] =
 {
-    16000, 24000, 32000, 48000
+    16000, 24000, 32000
 };
+
+uint32_t sampFreq;
+uint8_t clkValid = 0;
 
 #define N_sampleRates  TU_ARRAY_SIZE(sampleRatesList)
 
@@ -355,7 +358,7 @@ bool tud_audio_rx_done_pre_read_cb(uint8_t rhport, uint16_t n_bytes_received, ui
   (void)ep_out;
   (void)cur_alt_setting;
   //printf("pre: nb: %d ",n_bytes_received);
-  bsp_i2s_write(data_out_buf, data_out_buf_cnt);
+  //bsp_i2s_write(data_out_buf, data_out_buf_cnt);
 
   return true;
 }
@@ -367,13 +370,19 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received, u
   (void)ep_out;
   (void)cur_alt_setting;
 
-    static int i=0;
-    if(i++ % 100 == 0) {printf(".");fflush(stdout);}
-    if(i % 6000  == 0) {printf("\n");fflush(stdout);}
+    //static int i=0;
+    //if(i++ % 100 == 0) {printf(".");fflush(stdout);}
+    //if(i % 6000  == 0) {printf("\n");fflush(stdout);}
 
   // tud_audio_read returns number of bytes read into the buffer
   data_out_buf_cnt = tud_audio_read(data_out_buf, (sizeof(data_out_buf)));
   assert(n_bytes_received == data_out_buf_cnt);
+  if(data_out_buf_cnt != 64)
+    printf("dataout_buf_cnt: %d\n",data_out_buf_cnt);
+  // loopback
+  memcpy(data_in_buf,data_out_buf,data_out_buf_cnt);
+  data_in_buf_cnt = data_out_buf_cnt >> 1;
+  bsp_i2s_write(data_out_buf, data_out_buf_cnt);
 
   //printf("post: nb: %d db: %d\n",n_bytes_received,data_out_buf_cnt);
   return true;
@@ -401,7 +410,7 @@ bool tud_audio_tx_done_post_load_cb(uint8_t rhport, uint16_t n_bytes_copied, uin
     (void) cur_alt_setting;
 
 
-    TU_ASSERT(bsp_i2s_read(data_in_buf, data_in_buf_cnt) == data_in_buf_cnt ) ;
+    //TU_ASSERT(bsp_i2s_read(data_in_buf, data_in_buf_cnt) == data_in_buf_cnt ) ;
 
     return true;
 }

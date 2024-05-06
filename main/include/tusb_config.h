@@ -88,7 +88,8 @@ extern "C" {
 //--------------------------------------------------------------------
 // DO NOT THINK WE NEED TWO FORMATS -- DELETE IT EVENTUALLY
 
-#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN                                TUD_AUDIO_HEADSET_STEREO_DESC_LEN
+//#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN                                TUD_AUDIO_HEADSET_STEREO_16_32_DESC_LEN
+#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN                                TUD_AUDIO_HEADSET_STEREO_16_DESC_LEN
 
 // How many formats are used, need to adjust USB descriptor if changed
 #define CFG_TUD_AUDIO_FUNC_1_N_FORMATS                               2
@@ -96,7 +97,7 @@ extern "C" {
 // Audio format type I specifications
 #define CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE                         48000     // 16bit/48kHz is the best quality for Renesas RX
 #define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX                           2          // Need two Mic channels (was 1 in the example)
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX                           1          // One speaker channel (was 2 in the example)
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX                           2          // One speaker channel (was 2 in the example)
 
 // 16bit in 16bit slots
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_N_BYTES_PER_SAMPLE_TX          2
