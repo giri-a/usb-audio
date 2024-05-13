@@ -1,0 +1,178 @@
+--------------------------------------------------------------------------------------------------
+Issue#1 (Solved): For higher resolution (24 or 32 bits) the device goes into an infinite loop trying to 
+open endpoints and failing.
+--------------------------------------------------------------------------------------------------
+
+ESP32S3 uses a Synopsys USB IP. So the relevant low level software is in ..tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c.
+
+This file that the functions for opening and closing endpoints (dcd_edpt_open() and dcd_edpt_release()),
+which includes allocating space for the respective FIFO.
+
+The maximum number of endpoints supported is 6. For a speaker and a mic, 2 endpoints will be taken.
+
+Each endpoint has a 1024 bytes for the FIFOs.
+
+There is some algorithm (provided in the h/w reference manual that I have not seen), which calculates
+the bytes to be reserved for requested size. For OUT endpoint (that's device receiving as in a speaker),
+this is 2*fifo_siz + some margin (15+2*ep_count) - all in bytes. So for example, to support a stereo
+speaker of 24 or 32bit resolution at 48kHz, fifo_siz works out to 48 frames/ms*2(stereo)*4bytes/sample or
+392 bytes. When all the margins (!) added, this takes up 892 bytes of the storage. 
+
+Consequently, the ep allocation for the mic was failing when I set the resolution to 24bits. The current
+sampling frequency does not seem to matter as these sizes are calculated at max Fs.
+
+For some reason, endpoint release also fails. As the software tries to close and reattempts opening the
+terminal, all endpoints get used up and then neither speaker terminal not mic terminals successfully open.
+At this point nothing can be played or recorded even though the USB device remains enumerated.
+
+So currently this implementation is fixed at 16-bits.
+
+==================================================================================================
+Issue#2 (Solved): After 3 times of starting and stopping playback, playback stops. The application 
+such as quicktime keeps playing but nothing appears on the speaker.
+--------------------------------------------------------------------------------------------------
+
+When playback is paused, after some delay the stream is closed (who triggers that?) and I can see the
+message that "Set interface 1 alt 0" (interface 1 is for speaker and alt 0 is zero bandwidth part of the
+interface, alt (alternate 1) EP is for playing) and "Set interface 2 alt 0" ( interface 2 is for mic).
+In last part of call trace leading up to closing endpoint is:
+audiod_control_xfer_cb()->audiod_control_request()->audiod_set_interface()->
+usbd_edpt_close()->dcd_edpt_close()->dcd_edpt_release() (all dcd_* functions are in the file 
+..tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.ci; all usbd_* functions are in the file
+..tinyusb/src/device/usbd.c; all audiod_* functions are in the file ..tinyusb/src/class/audio/audio_device.c)
+
+// Release an endpoint.
+static bool dcd_edpt_release(uint8_t rhport, uint8_t dir)
+{
+  if (dir) {
+    TU_ASSERT(dwc_ep_config[rhport].in_ep == 0);    // Check if number of opened EPs is not zero
+    dwc_ep_config[rhport].in_ep--;                  // Release in_ep
+  } else {
+    TU_ASSERT(dwc_ep_config[rhport].out_ep == 0);
+    dwc_ep_config[rhport].out_ep--;
+  }
+  return true;
+} 
+dwc_ep_config[rhport].in_ep and dwc_ep_config[rhport].out_ep keeps count of the number of
+active endpoints; these counts are incremented when dcd_edpt_available() is called from
+dcd_edpt_open().
+ 
+I suppose ASSERT was to make sure that ep count is not decreased beyond 0.
+But eqality (==) in ASSERT makes sure that ASSERT fails when there is non-zero ep active. So 
+in_ep and out_ep is never decremented. 
+
+So after opening the stream for 3 times, total number active ep count reaches 6 and 
+further call to dcd_edpt_available() retuns false and dcd_edpt_open() declares that 
+"No endpoints available (ep_max=6)" and returns false.
+
+A BUG????
+
+I changed == to >
+TU_ASSERT(dwc_ep_config[rhport].in_ep > 0);  and
+TU_ASSERT(dwc_ep_config[rhport].out_ep > 0);
+
+and the problem disappeared.
+
+It is a bug indeed! Release 0.15.1~9 (released on 8/May/24) fixes it.
+
+==================================================================================================
+Issue#3 (Solved): A loopback at I2S level (externally connecting DOUT to DIN) records only 0!
+--------------------------------------------------------------------------------------------------
+
+I have been trying to debug distorted sound from the speaker (starts and resolves at random times)
+for some time now. To see if the digital signal going out to the I2S DAC/Amp is modified somehow,
+I used a jumper wire to connect DOUT to DIN of ESP32S3. The idea is that I'll record what is going
+out and match that with what is being sent out from the host.
+
+But I find the what is recorded is all quiet. Recording worked previously. 
+
+It turns out that it was a stupid mistake. I had to comment out offset canceller routine in i2s_read()
+to bypass the low-pass filter. The offset canceller (now named decode_and_cancel_offset()) did the
+arithmetic in 32bit with the 32-bit MSB aligned raw data (so that it retained the sub-decimal accuracy) and 
+shifted down data finally before sending it out. Then lower 16bits are sent up the USB to the host. 
+
+When I commented out the routine, there was no down shift and the lower 16bits has small or no values.
+
+Now I call the routine with reset=true, so that offset that is subtracted remains always at 0 (basically
+filter bypass) but down shift happens as usual.
+
+Current implementation has a macro which calls decode_and_cancel_offset() with appropriate arguments
+to disable any offset cancellation but retains the shift when I2S_EXTERNAL_LOOPBACK is defined.
+
+=================================================================================================
+Issue#4 (Solved): Noisy playback. Noise gets introduced at random times during playback. Sometimes
+noise suddenly diappears. Sometimes a reset is required. Sometimes changing sampling rate at the 
+runtime (goes through an EP closure/open, I2S restart) resolves it temporarily but sometimes it 
+does not!
+-------------------------------------------------------------------------------------------------
+Observations:
+1. Through an external loopback (I2S DOUT->DIN) and playing a file and recording simultaneously (using
+   a python script send_and_receive) I found that some of the samples are wrong. It starts happening
+   at random time but once it starts, it persists for some time. E.g., in the midst of a series of +ve
+   signals, there is one -ve data point or vice versa. 
+
+2. When comparing signals, I found that when this kind of signal switch happens, there seems to be
+   a periodicity of 16 samples (one switch at a multiple of 16). At 16kHz, each call to i2s_write
+   writes 16 samples. 
+
+3. Strangely, I see that the rceived signal values are often different by 1 : +ve values are less by
+   1 but -ve values are more by 1 (i.e. e.g., 472 received in place of 473 or -315 received in place
+   of -316!
+
+4. I did an internal loopback as well (before the data is written to I2S buffers). The errors 
+   persist.
+
+
+USB receive call graph:
+	-> tud_task_ext()			[usbd.c]
+	-> audiod_xfer_cb()			[audio_device.c]
+	-> audiod_rx_done_cb()			[audio_device.c]
+		tud_audio_rx_done_pre_read_cb(rhport, n_bytes_received, idx_audio_fct, audio->ep_out, audio->alt_setting[idxItf])
+		tu_fifo_write_n(&audio->ep_out_ff, audio->lin_buf_out, n_bytes_received)
+		usbd_edpt_xfer(rhport, audio->ep_out, audio->lin_buf_out, audio->ep_out_sz)
+		tud_audio_rx_done_post_read_cb(rhport, n_bytes_received, idx_audio_fct, audio->ep_out, audio->alt_setting[idxItf])
+	-> tud_audio_rx_done_pre_read_cb()	[uad_callbacks.c]
+	-> bsp_i2s_write()			[i2s_functions.c]
+
+USB endpoint allocate call graph:
+	
+	-> audiod_set_interface()		[audio_device.c]
+	-> usbd_edpt_open()			[usbd.c]
+	   audiod_set_interface() may also close endpoints
+	-> dcd_edpt_open ()			[synopsys/dwc2/dcd_dwc2.c]
+		-> dcd_edpt_available ()	[synopsys/dwc2/dcd_dwc2.c]
+		then dcd_edpt_open() checks for availability of buffer space (epsize xfer->max_size
+		is passed down in the argument. The size is given in the descriptor TUD_AUDIO_DESC_STD_AS_ISO_EP.
+
+I incorporated some edits based on https://github.com/espressif/esp-box/tree/master/examples/usb_headset
+in the hope of having this issue fixed. It basically employs a larger s/w buffer (10/11 times) to 
+store the rx samples after they are read from EP buffers. In effect, this reduces the call to i2s_write(). 
+
+But it did not fix the issue; it may have delayed it!
+
+It seems that #1 amd #2 are caused by occasional late call to i2s_write(). I2S employs a ping-pong 
+DMA buffer. When DMA logic of I2S needs to wrap around from pong to ping buffer, it is supposed to have
+been already written with new data. But i2s_write() is slightly delayed and it causes I2S to output
+one (when the noise starts) old data. 
+
+The implementation for the speaker path had the USB callback drive the timing of write to I2S buffers
+(tud_audio_rx_done_post_read_cb() calling i2s_write()). It turns out that there were two callbacks 
+in each 1mS period. Consequently i2s_write() was being called twice. Since each of i2s_write() call
+is blocking, more than required calls may have been messing with the timing. I also suspect that the 
+timing of every second callback may not have been exactly on 1ms mark (even though on an average there
+were exactly two calls every 1ms)/ That caused i2s_write() to be late occasionally. 
+
+In current implementation, i2s_write() calls are run on a thread and its timings are driven by I2S 
+DMA (through blocking calls). The USB callbacks on this path are ignored; data gathers in EP buffer 
+are pulled by this independent thread when required. The pulling of the data is delayed at the
+start by a few ms so that there is guarantee of more than required amount of data in EP buffer each
+time a frame is required.
+
+My learning is that when working with realtime situation, the timing should be controlled by
+the realtime side rather than the asynchrnous side like USB in this case.
+
+I could never figure the reason for #3. That may have something to do with python script that I
+use to capture data for recording...but who knows!!
+
+ESP32-S3 needs to be configured at 160MHz. At 80MHz, the noise reappears (much better than before
+and resolves soon enough not requring a reset).

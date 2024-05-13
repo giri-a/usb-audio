@@ -14,8 +14,11 @@
 #include "esp_log.h"
 #include "led_strip.h"
 #include "sdkconfig.h"
+#include "blink.h"
 
 static const char *TAG = "blink";
+
+uint32_t blink_state;
 
 uint32_t micros()
 {
@@ -32,7 +35,6 @@ uint32_t millis()
 */
 #define BLINK_GPIO CONFIG_BLINK_GPIO
 
-extern uint32_t blink_interval_ms;
 static uint8_t s_led_state = 0;
 
 #ifdef CONFIG_BLINK_LED_STRIP
@@ -79,9 +81,42 @@ static void blink_led(void)
     }
 }
 
+uint32_t slow_dim_table[] = {1,1,1,2,2,2,3,3,3,4,4,4,5,6,6,7,8,9,9,10,
+                            11,11,12,13,13,13,14,14,14,15,15,15};
+                            
+void drive_led()
+{
+
+  static uint32_t curr_ms, prev_ms = 0;
+    static int16_t slow_index = 0;
+    static int16_t slow_index_incr = 1;
+    static uint32_t level;
+
+    if(blink_state == BLINK_MOUNTED){
+        level = slow_dim_table[slow_index];
+        slow_index += slow_index_incr;
+        if(slow_index == 31) slow_index_incr = -1;
+        else if(slow_index == 0) slow_index_incr = 1;
+    }
+    else {
+        curr_ms = millis();
+        if ( (curr_ms - prev_ms) < blink_state) return; // not enough time
+        prev_ms = curr_ms;
+        if(level == 16) level = 0;
+        else            level = 16;
+    }
+    if(blink_state != BLINK_NOT_MOUNTED && level > 0) {
+        led_strip_set_pixel(led_strip,0, level, level, level); 
+        led_strip_refresh(led_strip);
+    }
+    else {
+        led_strip_clear(led_strip);
+    }
+}
+
 void configure_led(void)
 {
-    ESP_LOGI(TAG, "Example configured to blink addressable LED!");
+    //ESP_LOGI(TAG, "Example configured to blink addressable LED!");
     /* LED strip initialization with the GPIO and pixels number*/
     led_strip_config_t strip_config = {
         .strip_gpio_num = BLINK_GPIO,
@@ -153,8 +188,8 @@ void led_blinking_task(void)
   static uint32_t start_ms = 0;
 
   // Blink every interval ms
-  if ( millis() - start_ms < blink_interval_ms) return; // not enough time
-  start_ms += blink_interval_ms;
+  if ( millis() - start_ms < blink_state) return; // not enough time
+  start_ms += blink_state;
 
   blink_led();
   s_led_state = 1 - s_led_state; // toggle

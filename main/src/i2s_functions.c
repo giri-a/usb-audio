@@ -10,6 +10,29 @@ extern void toggle_gpio();
 
 //#define DUMMY_I2S 1
 
+/* 
+    Knowles SPH0645 I2S mic's data are MSB aligned 24 bits in a 32-bit word,
+    whose lower 6 bits are always 0.
+    Optional GAIN amount is considered in determining amount of right-shift
+    on the raw data to extract 16 bits. 
+    The data has signnficant offset, which is removed by a offset canceller filter.
+
+    The function here hardcodes 2-ch 16bit configuration of final data.
+*/
+
+
+//#define I2S_EXTERNAL_LOOPBACK
+
+#ifdef I2S_EXTERNAL_LOOPBACK
+#define MIC_RESOLUTION      16
+#define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), true)
+#else
+#define MIC_RESOLUTION      18
+#define GAIN                2      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
+#define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), false); left <<= GAIN; right <<= GAIN 
+#endif
+
+static const char* TAG = "i2s_functions";
 
 #ifdef DUMMY_I2S
 #include <rom/ets_sys.h>
@@ -27,12 +50,13 @@ static i2s_chan_handle_t                rx_handle = NULL;        // I2S rx chann
 #define I2S_GPIO_BCLK    GPIO_NUM_17
 
 // Current resolution, update on format change
-extern uint8_t current_resolution;
-size_t  data_in_buf_cnt = 0;   // value is set based on sample rate etc. when the i2s is configured 
+// number of bytes to be read from I2S every ms
+// value is set based on sample rate etc. when the i2s is configured 
+size_t  data_in_buf_cnt = 0;   
 
 /*raw buffer to read data from I2S dma buffers*/
 static char rx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
-static char rx_sample_buf_1 [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
+//static char rx_sample_buf_1 [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
 static size_t  rx_sample_buflen = 0;// value is set based on sample rate etc. when the i2s is configured 
 
 
@@ -95,8 +119,10 @@ esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate)
     */
     rx_sample_buflen  = chan_cfg.dma_frame_num * std_cfg.slot_cfg.slot_mode * std_cfg.slot_cfg.data_bit_width / 8;
     assert(rx_sample_buflen <= sizeof(rx_sample_buf));
-    data_in_buf_cnt   = chan_cfg.dma_frame_num * std_cfg.slot_cfg.slot_mode ;
-    //printf("rx_sample_buflen: %d, data_in_buf_cnt: %d\n", rx_sample_buflen, data_in_buf_cnt);
+    // Even though 32 bits for each data samples are read from I2S (for the specific Mic used), only 16 bits
+    // per sample is sent out over USB.
+    data_in_buf_cnt   = chan_cfg.dma_frame_num * std_cfg.slot_cfg.slot_mode *2 ;
+    ESP_LOGI(TAG,"rx_sample_buflen: %d, data_in_buf_cnt: %d", rx_sample_buflen, data_in_buf_cnt);
 
 
     ret_val |= i2s_channel_enable(tx_handle);
@@ -158,19 +184,6 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
     return ret_val;
 }
 
-/* 
-    Knowles SPH0645 I2S mic's data are MSB aligned 24 bits in a 32-bit word,
-    whose lower 6 bits are always 0.
-    Optional GAIN amount is considered in determining amount of right-shift
-    on the raw data to extract 16 bits. 
-    The data has signnficant offset, which is removed by a offset canceller filter.
-
-    The function here hardcodes 2-ch 16bit configuration of final data.
-*/
-
-
-#define MIC_RESOLUTION      16
-#define GAIN                0      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
 
 /*
  This filter is an implementation of a 1st-order filter described in 
@@ -286,19 +299,22 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
   This function is called by tud_audio_tx_done_post_load_cb(). 
   It reads 32bits raw data for both left and right channels from I2S DMA buffers, 
   gets upper 18bits LSB aligned. After offset cancellation, 16 lower bits are 
-  returned in data_buf.
+  returned in data_buf. count is the requested number of bytes. Actual number of
+  bytes read is returned.
 */
-size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
+size_t bsp_i2s_read(void *data_buf, size_t count)
 {
+
+    int16_t *out_buf = (int16_t*)data_buf;
     int32_t d_left, d_right;
     size_t  n_bytes;
     int i = 0;
     //unsigned ccount;
 
     //toggle_gpio();
-    while (i<count) {
+    while (i<count/2) {     // i keeps count of number of int16_t types processed into out_buf
         n_bytes = 0;
-        if(i2s_channel_read(rx_handle,rx_sample_buf_1, rx_sample_buflen, &n_bytes, 200) == ESP_OK) {
+        if(i2s_channel_read(rx_handle,rx_sample_buf, rx_sample_buflen, &n_bytes, 200) == ESP_OK) {
 
             // i2s_channel_read is blocking; it is expected to block till it gets enough number of
             // bytes (e.g., 128 bytes for 16KHz sampling rate every ms). This should keep time.
@@ -308,11 +324,9 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
                 if((n_bytes - j) >= 8) {
                     memcpy(&d_left,(rx_sample_buf+j),4);
                     memcpy(&d_right,(rx_sample_buf+j+4),4);
-                    //decode_and_cancel_offset(&d_left, &d_right, true);
-                    //d_left <<= GAIN; d_right <<= GAIN;
-                    d_left >>= 16; d_right >>=16;
-                    *(data_buf+i)   = d_left;
-                    *(data_buf+i+1) = d_right;
+                    I2S_PROCESS_READ_DATA(d_left, d_right);
+                    *(out_buf+i)   = d_left;
+                    *(out_buf+i+1) = d_right;
                     i += 2;
                     j += 8;
                 }
@@ -331,7 +345,7 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
             break;
         }
     } 
-    return i;
+    return i*2;
 }
 #endif
 
@@ -346,7 +360,7 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
   tx_sample_buf needs to be n_bytes/2 * 32-bit. 
   Max val of n_bytes is CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ (see uad_callbacks.c).
 */
-void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
+void bsp_i2s_write(void *data_buf, size_t n_bytes, uint8_t bit_resolution){
     //return;
     /* each sample is 32bits and there are 2 channels; so a EP buffer of CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ (N) 
      * bytes (each data is 16bits) will produce (N/2)*2=N 32bits total o/p samples for L+R  
@@ -354,10 +368,10 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
 
     static int32_t tx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ/2];
 
-    gpio_set_level(GPIO_NUM_12, 0);
+    gpio_set_level(GPIO_NUM_10, 0);
 
-    int16_t *src   = (int16_t*)data_buf;
-    int16_t *limit = (int16_t*)data_buf + n_bytes/2 ;
+    int16_t *src   = (int16_t *)data_buf;
+    int16_t *limit = (int16_t *)data_buf + n_bytes/2 ;
     int32_t *dst   = tx_sample_buf;
     int32_t data;
 
@@ -365,7 +379,7 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
 
     // convert 16 bits to 32 bits (MSB aligned)
     //assert(current_resolution == 16);
-    if (current_resolution == 16)
+    if (bit_resolution == 16)
     {
       while (src < limit)
       {
@@ -375,21 +389,24 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
             // copy the same data to both channels. NOTE This will depend on how the speaker is wired to I2S bus
             *dst++ = data;
       }
-      assert(dst <= &tx_sample_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ-1]);
-      // total number of bytes in tx_sample_buf is count*4 since each 16bit sample in data_buf
-      // made into a 32bit value and then replicated in both left and right channel.
+      assert(dst <= &tx_sample_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ/2-1]);
+
       if(CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX == 1 /* single channel*/) {
-        //            memcpy(rx_sample_buf,tx_sample_buf,n_bytes*4);
-        assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*4, &num_bytes, 200) == ESP_OK) ;
-        //assert(num_bytes == n_bytes*4);
+        // total number of bytes in tx_sample_buf is count*4 since each 16bit sample in data_buf
+        // made into a 32bit value and then replicated in both left and right channel.
+
+        ESP_ERROR_CHECK(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*4, &num_bytes, 200)) ;
+
       }
       else {
-        //            memcpy(rx_sample_buf,tx_sample_buf,n_bytes*2);
-        assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*2, &num_bytes, 200) == ESP_OK) ;
-        //assert(num_bytes == n_bytes*2);
+        // total number of bytes in tx_sample_buf is count*2 since each 16bit sample in data_buf
+        // made into a 32bit value.
+
+        ESP_ERROR_CHECK(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes*2, &num_bytes, 200)) ;
+
       }
     }
-    else if (current_resolution == 24)
+    else if (bit_resolution == 24)
     {
       while (src < limit)
       {
@@ -404,6 +421,6 @@ void bsp_i2s_write(uint16_t *data_buf, uint16_t n_bytes){
       else
         assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes,   &num_bytes, 200) == ESP_OK) ;
     }
-    gpio_set_level(GPIO_NUM_12, 1);
+    gpio_set_level(GPIO_NUM_10, 1);
 
 }

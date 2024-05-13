@@ -13,8 +13,8 @@
 
 esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate);
 esp_err_t bsp_i2s_reconfig(uint32_t sample_rate);
-size_t bsp_i2s_read(uint16_t *data_buf, size_t count);
-void bsp_i2s_write(uint16_t *data_buf, uint16_t count);
+size_t bsp_i2s_read(void *data_buf, size_t count);
+void bsp_i2s_write(void *data_buf, size_t count, uint8_t bit_resolution);
 void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, bool reset);
 
 #endif
