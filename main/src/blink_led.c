@@ -81,7 +81,7 @@ static void blink_led(void)
     }
 }
 
-uint32_t slow_dim_table[] = {1,1,1,2,2,2,3,3,3,4,4,4,5,6,6,7,8,9,9,10,
+uint32_t slow_dim_table[] = {1,1,1,1,1,1,2,2,2,2,2,3,3,3,3,4,4,4,4,5,5,6,6,7,8,9,9,10,
                             11,11,12,13,13,13,14,14,14,15,15,15};
                             
 void drive_led()
@@ -95,7 +95,7 @@ void drive_led()
     if(blink_state == BLINK_MOUNTED){
         level = slow_dim_table[slow_index];
         slow_index += slow_index_incr;
-        if(slow_index == 31) slow_index_incr = -1;
+        if(slow_index == 39) slow_index_incr = -1;
         else if(slow_index == 0) slow_index_incr = 1;
     }
     else {
