@@ -6,8 +6,6 @@
 #include "tusb_config.h"
 
 
-extern void toggle_gpio();
-
 //#define DUMMY_I2S 1
 
 /* 
@@ -45,7 +43,7 @@ static i2s_chan_handle_t                rx_handle = NULL;        // I2S rx chann
 #endif
 
 #define I2S_GPIO_DOUT    GPIO_NUM_14
-#define I2S_GPIO_DIN     GPIO_NUM_15
+#define I2S_GPIO_DIN     GPIO_NUM_12
 #define I2S_GPIO_WS      GPIO_NUM_16
 #define I2S_GPIO_BCLK    GPIO_NUM_17
 
@@ -215,7 +213,7 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
     if(left_sample_p != NULL)
     {
         if((*left_sample_p >> (32-MIC_RESOLUTION))> 32767 || (*left_sample_p >> (32 - MIC_RESOLUTION))< -32768){
-            printf("left sample clips before offset\n");
+        //    printf("left sample clips before offset\n");
         }
         //final_value = *left_sample_p - (l_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = *left_sample_p - (l_offset & BIT_MASK);
@@ -223,14 +221,14 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         l_offset += (*left_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
         if(*left_sample_p > 32767 || *left_sample_p < -32768){
-            printf("left sample clips\n");
+        //    printf("left sample clips\n");
         }
     }
 
     if(right_sample_p != NULL)
     {
         if((*right_sample_p >> (32-MIC_RESOLUTION))> 32767 || (*right_sample_p >> (32 - MIC_RESOLUTION))< -32768){
-            printf("right sample clips before offset\n");
+        //    printf("right sample clips before offset\n");
         }
         //final_value = *right_sample_p - (r_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = *right_sample_p - (r_offset & BIT_MASK);
@@ -238,7 +236,7 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         r_offset += (*right_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
         if(*right_sample_p > 32767 || *right_sample_p < -32768){
-            printf("right sample clips\n");
+        //    printf("right sample clips\n");
         }
     }
 }
@@ -311,7 +309,6 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
     int i = 0;
     //unsigned ccount;
 
-    //toggle_gpio();
     while (i<count/2) {     // i keeps count of number of int16_t types processed into out_buf
         n_bytes = 0;
         if(i2s_channel_read(rx_handle,rx_sample_buf, rx_sample_buflen, &n_bytes, 200) == ESP_OK) {
@@ -368,8 +365,6 @@ void bsp_i2s_write(void *data_buf, size_t n_bytes, uint8_t bit_resolution){
 
     static int32_t tx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ/2];
 
-    gpio_set_level(GPIO_NUM_10, 0);
-
     int16_t *src   = (int16_t *)data_buf;
     int16_t *limit = (int16_t *)data_buf + n_bytes/2 ;
     int32_t *dst   = tx_sample_buf;
@@ -421,6 +416,5 @@ void bsp_i2s_write(void *data_buf, size_t n_bytes, uint8_t bit_resolution){
       else
         assert(i2s_channel_write(tx_handle,tx_sample_buf, n_bytes,   &num_bytes, 200) == ESP_OK) ;
     }
-    gpio_set_level(GPIO_NUM_10, 1);
 
 }

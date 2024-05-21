@@ -210,17 +210,18 @@ static void amp (int16_t *s, size_t nframes, int16_t gain[]){
 
 static void usb_headset_spk(void *pvParam)
 {
-        data_out_buf_cnt = s_spk_bytes_ms;
+    data_out_buf_cnt = s_spk_bytes_ms;
     while (1) {
-        gpio_set_level(GPIO_NUM_7, 0);
         // While the speaker stream is closed, we wait for the signal from tud_audio_set_itf_cb(), 
         // which does the job of opening and closing the interface (stream). 
-        // NOTE that this task is suspended when ulTaskNotifyTake() is executed and remains suspended
-        // till the stream is opened.
+        // NOTE that this task is suspended when ulTaskNotifyTake() is executed for the first time
+        // and remains suspended till the stream is opened.
+        // The delay following the opening of the stream is to make sure that more than enough data
+        // is available at the EP buffer.
         if (s_spk_active == false) {
             ulTaskNotifyTake(pdFAIL, portMAX_DELAY);
-            vTaskDelay(20); //1 tick is portTICK_PERIOD_MS ms (usually 10ms); We'll lost that much of audio
-            continue;
+            vTaskDelay(20); //1 tick is portTICK_PERIOD_MS ms (usually 10ms); We'll have lost that much of audio
+            //continue;
         }
         // The timing of the while loop is dictated by i2s_write. A write to I2S DMA channel buffers
         // is a blocking operation. The value of data_out_buf_cnt and blocking nature of this operation
@@ -232,13 +233,12 @@ static void usb_headset_spk(void *pvParam)
         bsp_i2s_write(data_out_buf, data_out_buf_cnt, s_spk_resolution);
 
         size_t bytes_available = tud_audio_available();
-        bytes_available_ary[bytes_available]++;
+        bytes_available_ary[bytes_available]++;     // to keep statistics
         
         // See comments above. We do not except the condition in if() to ever evaluate to true.
         if (bytes_available < s_spk_bytes_ms) {
             ESP_LOGI(TAG,"Only %d bytes available; expecting >= %d bytes",bytes_available,s_spk_bytes_ms);
             //vTaskDelay(2);
-            gpio_set_level(GPIO_NUM_7, 1);
             continue ;
         }   
         data_out_buf_cnt = tud_audio_read(data_out_buf, s_spk_bytes_ms);
@@ -247,7 +247,6 @@ static void usb_headset_spk(void *pvParam)
         amp(data_out_buf,data_out_buf_cnt/4, spk_gain);
 #endif
         //bsp_i2s_write(data_out_buf, data_out_buf_cnt, s_spk_resolution);
-        gpio_set_level(GPIO_NUM_7, 1);
     }
 }
 
@@ -357,8 +356,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
   TU_LOG2("Set interface %d alt %d\r\n", itf, alt);
   if (ITF_NUM_AUDIO_STREAMING_SPK == itf) {
     if(alt != 0) {
-        uint8_t spk_resolution = spk_resolutions_per_format[alt - 1];
-        s_spk_resolution = spk_resolution;
+        s_spk_resolution = spk_resolutions_per_format[alt - 1];
         s_spk_bytes_ms = sampFreq / 1000 * s_spk_resolution * CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX/ 8;
         //rx_bytes_required = (CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_MS - 1) * s_spk_bytes_ms;
         s_spk_active = true;

@@ -20,43 +20,12 @@ extern uint32_t sampleRatesList[]; // sampFreq is one of the vales in this array
 
 extern uint32_t blink_state;
 
-//static ringbuf_handle_t rb_debug = NULL;
-/*
-#define USBD_STACK_SIZE     4096
-StackType_t  usb_device_stack[USBD_STACK_SIZE];
-StaticTask_t usb_device_taskdef;
-*/
 esp_err_t usb_headset_init(void);
 
-/*
-// for i2s_read task
-#define I2S_STACK_SIZE     4096
-StackType_t  i2s_device_stack[I2S_STACK_SIZE];
-StaticTask_t i2s_device_taskdef;
-
-#ifdef DUMMY_I2S
-StackType_t  i2s_dummy_device_stack[I2S_STACK_SIZE];
-StaticTask_t i2s_dummy_device_taskdef;
-#endif
-static const char *TAG = "main";
-*/
-
-/*
-typedef struct {
-    int64_t delta_time;
-    int     n_bytes;
-} data_read_times_t;
-data_read_times_t delta_times[100];
-*/
-#define TOGGLE_GPIO GPIO_NUM_34
-//#define GPIO_OUTPUT_PIN_SEL  (1ULL<<TOGGLE_GPIO)
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_NUM_7) |\
                               (1ULL<<GPIO_NUM_8) |\
                               (1ULL<<GPIO_NUM_9) |\
-                              (1ULL<<GPIO_NUM_10) |\
-                              (1ULL<<GPIO_NUM_11) |\
-                              (1ULL<<GPIO_NUM_12) |\
-                              (1ULL<<GPIO_NUM_13) )
+                              (1ULL<<GPIO_NUM_10) )
 
 void init_gpio()
 {
@@ -75,14 +44,6 @@ void init_gpio()
     //configure GPIO with the given settings
     gpio_config(&io_conf);
 }
-void toggle_gpio()
-{
-    static bool flag = false;
-
-    gpio_set_level(TOGGLE_GPIO, flag?1:0);
-    flag = !flag;
-}
-
 
 void app_main()
 {
