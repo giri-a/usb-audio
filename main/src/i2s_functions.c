@@ -26,7 +26,7 @@
 #define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), true)
 #else
 #define MIC_RESOLUTION      18
-#define GAIN                2      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
+#define GAIN                0      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
 #define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), false); left <<= GAIN; right <<= GAIN 
 #endif
 
