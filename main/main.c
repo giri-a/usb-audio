@@ -78,10 +78,11 @@ void app_main()
     usb_get_data = &bsp_i2s_read;
     i2s_get_data = &uad_processed_data;
 
+    /* Use the following for USB loopback and I2S loopback. Comment out the two lines above.*/
     /* I2S Mic => I2S Speakers ; USB out => USB in 
     usb_get_data = &uad_processed_data;
     i2s_get_data = &bsp_i2s_read;
-*/
+    */
 
     ESP_LOGI(TAG, "I2S_DATA_IN_BUFSIZ: %d, I2S_DATA_OUT_BUFSIZ: %d", I2S_DATA_IN_BUFSIZ, I2S_DATA_OUT_BUFSIZ);
 
@@ -112,7 +113,7 @@ void app_main()
     }
     ESP_LOGI(TAG, "TinyUSB initialized");
 
-    ret_val = xTaskCreatePinnedToCore(i2s_consumer_func, "i2s_consumer_func", 4*1024, (void*)& s_spk_active, 1, &spk_task_handle, 0);
+    ret_val = xTaskCreatePinnedToCore(i2s_consumer_func, "i2s_consumer_func", 4*1024, (void*)& s_spk_active, 1, &spk_task_handle, 1);
     if (ret_val != pdPASS) {
         ESP_LOGE(TAG, "Failed to create i2s_read_write_task");
         //return ESP_FAIL;

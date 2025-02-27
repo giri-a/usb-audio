@@ -27,7 +27,7 @@
 #define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), true)
 #else
 #define MIC_RESOLUTION      24
-#define GAIN                0      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
+#define GAIN                4      // in bits i.e., 1 =>2, 2=>4, 3=>8 etc.
 #define I2S_PROCESS_READ_DATA(left, right) decode_and_cancel_offset(&(left), &(right), false); left <<= GAIN; right <<= GAIN 
 #endif
 
@@ -55,35 +55,21 @@ static size_t  rx_sample_buflen = 0;// value is set based on sample rate etc. wh
 
 extern uint8_t s_spk_resolution ;
 
+extern int32_t mic_gain[2];
+
 esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate)
 {
     esp_err_t ret_val = ESP_OK;
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     i2s_slot_mode_t channel_fmt = I2S_SLOT_MODE_STEREO;
-    /*
-    if (CHANNEL_NUM == 1) {
-        channel_fmt = I2S_SLOT_MODE_MONO;
-    } else if (CHANNEL_NUM == 2) {
-        channel_fmt = I2S_SLOT_MODE_STEREO;
-    } else {
-        ESP_LOGE(TAG, "Unable to configure channel_format %d", CHANNEL_NUM);
-        channel_fmt = I2S_SLOT_MODE_MONO;
-    }
-    */
-    /*
-    if (bits_per_chan != 32) {
-        ESP_LOGE(TAG, "Unable to configure bits_per_chan %d", bits_per_chan);
-        bits_per_chan = 32;
-    }
-    */
+
     // default chan_cfg : 
     // { .id = <i2s_num>, .role = <I2S_ROLE_MASTER>, .dma_desc_num = 6, .dma_frame_num = 240, .auto_clear = 0, .intr_priority = 0, }
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(i2s_num, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 2;
     // dma_frame_num is changed from dafult value of 240 to reduce latency
     chan_cfg.dma_frame_num = sample_rate/1000;  // number of frames in 1mS; cannot handle sample_rate like 44.1kHz
-    //ret_val |= i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
+    
     ret_val |= i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
     //i2s_std_config_t std_cfg = I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan);
     i2s_std_config_t std_cfg = {
@@ -123,39 +109,7 @@ esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate)
 
     ret_val |= i2s_channel_enable(tx_handle);
     ret_val |= i2s_channel_enable(rx_handle);
-#else
 
-    i2s_channel_fmt_t channel_fmt = I2S_CHANNEL_FMT_RIGHT_LEFT;
-    if (channel_format == 1) {
-        channel_fmt = I2S_CHANNEL_FMT_ONLY_LEFT;
-    } else if (channel_format == 2) {
-        channel_fmt = I2S_CHANNEL_FMT_RIGHT_LEFT;
-    } else {
-        ESP_LOGE(TAG, "Unable to configure channel_format %d", channel_format);
-        channel_format = 1;
-        channel_fmt = I2S_CHANNEL_FMT_ONLY_LEFT;
-    }
-
-    if (bits_per_chan != 16 && bits_per_chan != 32) {
-        ESP_LOGE(TAG, "Unable to configure bits_per_chan %d", bits_per_chan);
-        bits_per_chan = 16;
-    }
-#define I2S_MCLK_MULTIPLE_DEFAULT 0
-
-    i2s_config_t i2s_config = I2S_CONFIG_DEFAULT(sample_rate, channel_fmt, bits_per_chan);
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = GPIO_NUM_38, //GPIO_I2S_SCLK,
-        .ws_io_num = GPIO_NUM_36, //GPIO_I2S_LRCK,
-        .data_out_num = GPIO_I2S_DOUT,
-        .data_in_num = GPIO_NUM_37, //GPIO_I2S_SDIN,
-        .mck_io_num = GPIO_I2S_MCLK,
-    };
-
-    ret_val |= i2s_driver_install(i2s_num, &i2s_config, 0, NULL);
-    ret_val |= i2s_set_pin(i2s_num, &pin_config);
-
-#endif
     return ret_val;
 }
 
@@ -180,7 +134,37 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
     return ret_val;
 }
 
+int16_t mic_amp(int32_t sig, int32_t gain)
+{
+    int64_t t = (int64_t)sig * (int64_t)gain;
 
+    // sig is assumed to be in 1.31 and gain in 8.24 formats.
+    // Therefore t must be in 9.55 fotmat. To get it back in 1.31, we need to
+    // shift it right by 8 positions. We'll put in a check here so that, we 
+    // want to know if we are losing significant bits. Note that when we pick
+    // upper 16 bits finally for the result, we are effectively shifting the
+    // result down by 48 bits. So altogether, we are scaling the multiplication 
+    // result by 2^-40 
+
+    bool positive = (t>=0);
+
+    for(int i=0; i<8; i++)
+    {
+        t = t<<1;
+        if(positive && (t<0)){
+            printf("mic_amp overflow on positive side\n");
+            return 32767; 
+        } 
+        if(!positive && (t>=0))
+        {
+            printf("mic_amp overflow on -negative side\n");
+            return 32768; 
+        }
+    }
+    int16_t *p = (int16_t*)&t;
+    p += 3;
+    return *p;
+}
 /*
  This filter is an implementation of a 1st-order filter described in 
  https://docs.xilinx.com/v/u/en-US/wp279
@@ -222,14 +206,16 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         //final_value = *left_sample_p - (l_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = (*left_sample_p & BIT_MASK) - (l_offset & BIT_MASK);
         //*left_sample_p = (final_value >> (32-MIC_RESOLUTION));
-        *left_sample_p = (final_value >> 8);
+        *left_sample_p = mic_amp(final_value,mic_gain[0]);
         l_offset += (*left_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
         // clip the signal beyond 16-bit range; this essential since we'll keep only 16LSBs
+        /*
         if(*left_sample_p > 32767)
             *left_sample_p = 32676;
         if(*left_sample_p < -32768)
             *left_sample_p = -32768;
+        */
     }
 
     if(right_sample_p != NULL)
@@ -240,14 +226,16 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         //final_value = *right_sample_p - (r_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = (*right_sample_p & BIT_MASK)  - (r_offset & BIT_MASK);
         //*right_sample_p = (final_value >> (32-MIC_RESOLUTION));
-        *right_sample_p = (final_value >> 8);
+        *right_sample_p = mic_amp(final_value,mic_gain[1]);
         r_offset += (*right_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
         // clip the signal beyond 16-bit range; this essential since we'll keep only 16LSBs
+        /*
         if(*right_sample_p > 32767)
             *right_sample_p = 32676;
         if(*right_sample_p < -32768)
             *right_sample_p = -32768;
+        */
     }
 }
 
@@ -302,7 +290,7 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 }
 
 #else
-    static int t = 0; static int32_t raw_data[32]; static int32_t processed_data[32]; int k = 0;
+    int t_i2s = 0; static int32_t raw_data[32]; static int32_t processed_data[32]; int k = 0;
     static int16_t final_data[32];
 /*
   This function is called by tud_audio_tx_done_post_load_cb(). 
@@ -313,17 +301,18 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 */
 size_t bsp_i2s_read(void *data_buf, size_t count)
 {
-    t++;
+    t_i2s ++;
     int16_t *out_buf = (int16_t*)data_buf;
-    int32_t d_left, d_right;
-    size_t  n_bytes;
+    static size_t  n_bytes;
+    static int32_t d_left, d_right;
+    static int16_t *p_d_l_16b = (int16_t *)&d_left;
+    static int16_t *p_d_r_16b = (int16_t *)&d_right;
+
     int i = 0;
-    //unsigned ccount;
-    //assert(count == rx_sample_buflen);
+ 
     while (i<count/2) {     // i keeps count of number of int16_t types processed into out_buf
         n_bytes = 0;
         if(i2s_channel_read(rx_handle,rx_sample_buf, rx_sample_buflen, &n_bytes, 200) == ESP_OK) {
-
             // i2s_channel_read is blocking; it is expected to block till it gets enough number of
             // bytes (e.g., 128 bytes for 16KHz sampling rate every ms). This should keep time.
             //assert(rx_sample_buflen==n_bytes);
@@ -334,17 +323,21 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
                 if((n_bytes - j) >= 8) {
                     memcpy(&d_left,(rx_sample_buf+j),4);
                     memcpy(&d_right,(rx_sample_buf+j+4),4);
-                    if(t>8000 && t<8003) raw_data[k] = d_left ;
+                    if(t_i2s>1000 && t_i2s<1003) raw_data[k] = d_left ;
                     //I2S_PROCESS_READ_DATA(d_left, d_right);
-                    decode_and_cancel_offset(&d_left, &d_right, false); // true: no offset cancelling; just the shifting 
-                    //if(t>8000 && t<8050) processed_data[k] = d_left;
+                    decode_and_cancel_offset(&d_left, &d_right, true); // true: no offset cancelling; just the shifting 
                     // before we pick the 16 lsb, we need to be sure that the value of d_left fits in 16bits
                     //if(d_left < -32768) d_left = -32768;
                     //if(d_left >  32767) d_left =  32767;
+                    //*(out_buf+i)   = *(((int16_t*)&d_left)+1);
+                    //*(out_buf+i)   = *(p_d_l_16b+1);
                     *(out_buf+i)   = d_left;
                     //*(out_buf+i)   = d_left>>15;
-                    if(t>8000 && t<8003) final_data[k++] = *(out_buf+i);
+                    if(t_i2s>1000 && t_i2s<1003) processed_data[k] = d_left;
+                    if(t_i2s>1000 && t_i2s<1003) final_data[k++] = *(out_buf+i);
+                    //*(out_buf+i+1) = *(p_d_r_16b+1);
                     *(out_buf+i+1) = d_right;
+                    //*(out_buf+i+1) = *(((int16_t*)&d_right)+1);
                     i += 2;
                     j += 8;
                 }
@@ -354,6 +347,7 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
                     break;
                 }
             }
+            //printf("k: %d ",k);
             //if(i>=count) printf("i: %d, count: %d\n",i,count);
             //fflush(stdout);
             assert(i<=count);
@@ -363,12 +357,14 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
             break;
         }
     } 
-    if(t==8003){
+    if(t_i2s==1003){
+        printf("mic_gain: %ld , %ld\n",mic_gain[0], mic_gain[1]);
         for(k=0;k<32;k++){
         //printf("%ld => %ld => %d\n",raw_data[k],processed_data[k],final_data[k]);
-        printf("%08lx %ld \t %08x %d\n",raw_data[k],raw_data[k],final_data[k], final_data[k]);
+        printf("%08lx %ld \t %08lx %ld \t %08x %d\n",raw_data[k],raw_data[k],processed_data[k], processed_data[k], final_data[k], final_data[k]);
         }
     }
+    //printf("%d\n",t_i2s);
     if(i*2 < count)
     ESP_LOGI(TAG,"returning %d bytes; was asked for %d bytes",i*2,count);
     return i*2;
@@ -428,14 +424,19 @@ void bsp_i2s_write(void *data_buf, size_t n_bytes){
 }
 
 
-extern size_t s_spk_bytes_ms;
-
-// The following function is called repeatedly by i2s_consumer_func to get data
-// to be sent to the I2S transmit DMA buffer.
-// This function is expected to populate 'count' number of bytes in the buffer
-// (pointed to by data_buf). It may occasionally send fewer bytes. The number of 
-// bytes actually filled in the buffer is returned.
+/* The following function is called by i2s_consumer_func to get data from USB
+  to be sent to the I2S transmit DMA buffer.
+  This function is expected to populate 'count' number of bytes in the buffer
+  (pointed to by data_buf). It may occasionally send fewer bytes. The number of 
+  bytes actually filled in the buffer is returned.
+*/
 uint16_t (*i2s_get_data)(void *data_buf, uint16_t count);
+
+/* Each call of (*i2s_get_data)() requests 's_spk_bytes_ms' bytes from
+   the USB. Value of this variable is set based on sampling frequency etc..
+   in the USB related functions.
+*/
+extern size_t s_spk_bytes_ms;
 
 /* This function is meant to be run as a task. It repeatedly calls a producer 
     function (i2s_get_data()) to get data and sends it along to I2S DMA.
@@ -444,19 +445,35 @@ uint16_t (*i2s_get_data)(void *data_buf, uint16_t count);
 */
 void i2s_consumer_func(bool *active){
 
+    /* running flag is used to delay the start of reading the producer FIFOs. 
+       Without a delay (*i2s_get_data)() starts reading the FIFO immediately
+       and returns with 0 bytes and ends up spinning too fast to trip the WDT.
+       With this delay, USB FIFO's is guaranteed to accumulate some data in the
+       beginning and is expected to always run ahead of the reading function.
+    */
+    static bool running = false;
     while(1){
         if (*active == false) {
+            // reset the 'running' flag when the channel is closed
+            running = false;
             //ulTaskNotifyTake(pdFAIL, portMAX_DELAY);
-            vTaskDelay(100/portTICK_PERIOD_MS); //delay for 100ms; max audio loss will be of 100mS
+            // check after some delay (100ms) not to block the CPU
+            vTaskDelay(100/portTICK_PERIOD_MS); 
             continue;
         }
-        
+        else if(running == false) {
+            // get to 'running' after some delay so that the following
+            // read function gets called after some data accumulates in USB FIFO.
+            vTaskDelay(50/portTICK_PERIOD_MS);
+            running = true;
+        }
+
         data_out_buf_cnt = (*i2s_get_data)(data_out_buf, s_spk_bytes_ms);
-        //if (data_out_buf_cnt < s_spk_bytes_ms) {
-        //    ESP_LOGI(TAG,"Only %d bytes available; expecting >= %d bytes",data_out_buf_cnt,s_spk_bytes_ms);
+        if (data_out_buf_cnt < s_spk_bytes_ms) {
+            ESP_LOGI(TAG,"Only %d bytes available; expecting >= %d bytes",data_out_buf_cnt,s_spk_bytes_ms);
         //    //vTaskDelay(2);
         //    //continue ;
-        //}   
+        }   
         if(data_out_buf_cnt > 0)
             bsp_i2s_write(data_out_buf, data_out_buf_cnt);
     }
