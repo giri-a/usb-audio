@@ -76,7 +76,7 @@ void app_main()
 
     /* USB out => I2S Speakers; USB in <= I2S Mic */
     usb_get_data = &bsp_i2s_read;
-    i2s_get_data = &uad_processed_data;
+    i2s_get_data = &tud_audio_read;
 
     /* Use the following for USB loopback and I2S loopback. Comment out the two lines above.*/
     /* I2S Mic => I2S Speakers ; USB out => USB in 
@@ -84,7 +84,7 @@ void app_main()
     i2s_get_data = &bsp_i2s_read;
     */
 
-    ESP_LOGI(TAG, "I2S_DATA_IN_BUFSIZ: %d, I2S_DATA_OUT_BUFSIZ: %d", I2S_DATA_IN_BUFSIZ, I2S_DATA_OUT_BUFSIZ);
+    // ESP_LOGI(TAG, "I2S_DATA_IN_BUFSIZ: %d, I2S_DATA_OUT_BUFSIZ: %d", I2S_DATA_IN_BUFSIZ, I2S_DATA_OUT_BUFSIZ);
 
     init_gpio();
 
@@ -103,7 +103,7 @@ void app_main()
        created to avoid a timing issue. I think in this program there will be 
        IDLE0, IDLE0, esp_timer, timer_svc, ipc0, ipc1, main plus two tasks created below.
     */
-    allocate_memory_for_status();
+    // allocate_memory_for_status();
 
     ret_val = xTaskCreatePinnedToCore(usb_device_task, "usb_device_task", 3 * 1024, NULL, 2, &usb_device_task_handle,0);
     if (ret_val != pdPASS) {
@@ -125,29 +125,14 @@ void app_main()
 
     blink_state = BLINK_NOT_MOUNTED;
 
-    print_task_list();
+    // print_task_list();
 
     while(1)
     {
         //int bytes_left = uxTaskGetStackHighWaterMark(usb_device_task_handle);
-        //if(usb_device_task_handle != NULL && bytes_left < 128)
-        //ESP_LOGW(TAG,"usb_read_write_task stack : %d bytes", bytes_left);
 
         // led_blinking_task();
         drive_led();
-        /*
-        print_trace_info();
-        char *buffer = (char *)pvPortMalloc(1024); // Allocate a buffer for the stats
-         if (buffer != NULL) {
-             vTaskList(buffer); // Get task list
-             printf("Task List:\n%s\n", buffer);
-     
-             vTaskGetRunTimeStats(buffer); // Get runtime stats
-             printf("Run Time Stats:\n%s\n", buffer);
-     
-             free(buffer);
-         }
-        */
          vTaskDelay(pdMS_TO_TICKS(50));
     } 
 }

@@ -1,5 +1,5 @@
 {
-    "idf.adapterTargetName": "esp32s3",
+    "idf.port": "/dev/tty.wchusbserial56910085151",
     "idf.portWin": "COM3",
     "idf.flashType": "UART",
     "files.associations": {
@@ -15,8 +15,30 @@
         "tusb_common.h": "c",
         "esp_idf_version.h": "c",
         "tusb_config.h": "c",
-        "i2s_functions.h": "c"
+        "i2s_functions.h": "c",
+        "audio_device.h": "c",
+        "tusb_option.h": "c",
+        "tusb_compiler.h": "c",
+        "freertos.h": "c",
+        "freertosconfig.h": "c",
+        "uad_callbacks.h": "c",
+        "i2s_hal.h": "c",
+        "i2s_private.h": "c"
     },
-    "idf.port": "/dev/cu.wchusbserial56F20457811",
-    "idf.gitPath": "git"
+    "cmake.configureOnOpen": false,
+    "idf.espIdfPath": "/Users/jeet/esp/v5.4/esp-idf",
+    "idf.toolsPath": "/Users/jeet/esp-idf-tools",
+
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.openOcdLaunchArgs": [
+      "-c",
+      "init",
+      "-c",
+      "reset halt",
+      "-c",
+      "esp appimage_offset 0x10000"
+],
+"idf.pythonInstallPath": "/usr/bin/python3"
 }
