@@ -16,6 +16,7 @@
 #include "sdkconfig.h"
 #include "i2s_functions.h"
 #include "data_buffers.h"
+#include "utilities.h"
 
 #include "gain_table.h"
 
@@ -43,7 +44,7 @@ const uint8_t spk_resolutions_per_format[CFG_TUD_AUDIO_FUNC_1_N_FORMATS] = {CFG_
 const uint8_t mic_resolutions_per_format[CFG_TUD_AUDIO_FUNC_1_N_FORMATS] = {CFG_TUD_AUDIO_FUNC_1_FORMAT_1_RESOLUTION_TX
                                                                            }; 
 
-// Current resolution, update on format change
+// Current resolution, update on format change. However we adtertise only 16bit, so its value is always 16btsi
 uint8_t s_spk_resolution = spk_resolutions_per_format[0];
 static uint8_t s_mic_resolution = mic_resolutions_per_format[0];
 size_t s_spk_bytes_ms = 0;
@@ -133,6 +134,7 @@ void usb_device_task(void *param)
     vTaskDelete(NULL);
 }
 
+#ifdef DISPLAY_STATS
 size_t spk_bytes_available_ary[256] = {0};
 static size_t mic_bytes_available_ary[256] = {0};
 static size_t mic_bytes_sent_ary[256] = {0};
@@ -159,58 +161,8 @@ static void display_stats(size_t *data,int size, char *info){
         }
     }
 }
-int16_t q15_multiply(int16_t a, int16_t b){
-    // Q15 format numbers are assumed to be in 1.15 format (ranges from -1 to 0.99999)
-    // Multiplication is usual operation. However the result is in 2.30 format and requires 
-    // 32 bits to contain. To convert this result to 1.15 format, a left shift is performed
-    // and upper 16 bits are returned. 
+#endif
 
-    int32_t t = (int32_t)a * (int32_t)b;
-    t = t<<1;
-    // It is a little endian machine; &t points to the LSB and (&t)+3 to the MSB.
-    // We are casting &t to the pointer of a int16_t data type so that *p gives
-    // lower 16 bits and *(p+1) gives us upper 16 bits.
-    int16_t *p = (int16_t*) &t;
-    return *++p;
-}
-
-int32_t q31_multiply(int32_t a, int32_t b){
-    // Q31 format numbers are assumed to be in 1.31 format (ranges from -1 to 0.99999)
-    // Multiplication is usual operation. However the result is in 2.62 format and requires 
-    // 64 bits to contain. To convert this result to 1.31 format, a left shift is performed
-    // and upper 32 bits are returned. 
-
-    int64_t t = (int64_t)a * (int64_t)b;
-    t = t<<1;
-    // It is a little endian machine; &t points to the LSB and (&t)+3 to the MSB.
-    // We are casting &t to the pointer of a int32_t data type so that *p gives
-    // lower 32 bits and *(p+1) gives us upper 32 bits.
-    int32_t *p = (int32_t*) &t;
-    return *++p;
-}
-
-int32_t q7p24_multiply(int32_t a, int32_t b){
-    // Q7.24 format numbers have 8bits left to the binary point and 24 bits to the right.
-    // Multiplication result has 16bits to the left of binary point and 48bits to the right
-    // and requires 64 bits to be contained. To convert this back to Q7.24, we need to 
-    // shift right by 24 places and pick out lower 32 bits OR shift left by 8 places and 
-    // pick out the upper 32 bits. A check of the overflow is required for satuarting the
-    // result.
-
-    int64_t t = (int64_t)a * (int64_t)b;
-    // Overflow check: we'll get upper 16bits and check if it is < -256 or > 255
-    // It is a little endian machine; &t points to the LSB and (&t)+3 to the MSB.
-    // We are casting &t to the pointer of a int16_t data type so that *p gives
-    // lowest 16 bits and *(p+3) gives us highest 16 bits.
-    int16_t *p = (int16_t*) &t;
-    p += 3;
-    if(*p < -128) return 0x80000000;
-    if(*p >  127) return 0x7fffffff;
-
-    t = t<<8;
-    int32_t *q = (int32_t*) &t;
-    return *++q;
-}
 
 void usb_headset_init(void)
 {
@@ -313,40 +265,46 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
         //xTaskNotifyGive(spk_task_handle);
         TU_LOG1("Speaker interface %d-%d opened (%d bits)\n", itf, alt, s_spk_resolution);
         ESP_LOGI(TAG,"Speaker interface %d opened (alt=%d) : %d bits @%lu Hz", itf, alt, s_spk_resolution,sampFreq);
+
+#ifdef DISPLAY_STATS
         for(int i=0; i< 256; i++)
             spk_bytes_available_ary[i] = 0;
+#endif
+
     }
     else {
         s_spk_active = false;
         ESP_LOGI(TAG,"Speaker interface %d closed (alt=%d)", itf, alt);
+#ifdef DISPLAY_STATS
         display_stats(spk_bytes_available_ary,256,"speaker");
+#endif
     }
   } else if (ITF_NUM_AUDIO_STREAMING_MIC == itf ) {
     if(alt != 0) {
         uint8_t mic_resolution = mic_resolutions_per_format[alt - 1];
         s_mic_resolution = mic_resolution;
         s_mic_bytes_ms = sampFreq / 1000 * s_mic_resolution * CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX/ 8;
-        //tx_bytes_required = (CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_MS - 1) * s_mic_bytes_ms;
+
         s_mic_active = true; 
         //xTaskNotifyGive(mic_task_handle);
         TU_LOG1("Microphone interface %d-%d opened (%d bits)\n", itf, alt, s_mic_resolution);
         ESP_LOGI(TAG,"Microphone interface %d opened (alt=%d) : %d bits @%lu Hz", itf, alt, s_mic_resolution,sampFreq);
+#ifdef DISPLAY_STATS
         for(int i=0; i< 256; i++) {
             mic_bytes_available_ary[i] = 0;
             mic_bytes_sent_ary[i] = 0;
         }
+#endif
     }
     else {
         s_mic_active = false;
         ESP_LOGI(TAG, "Microphone interface %d closed (alt=%d)", itf, alt);
+
+#ifdef DISPLAY_STATS
         display_stats(mic_bytes_available_ary,256,"mic - bytes read from I2S");
         display_stats(mic_bytes_sent_ary,256,"mic - bytes sent over USB");
-/*
-        ESP_LOGI("data_in_buf","");
-        for (int i=0; i< data_in_buf_cnt; i++){
-            printf("    [%3d]: %x\n",i,data_in_buf[i]);
-        }
-*/
+#endif
+
     }
   }   
 
@@ -520,8 +478,6 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
                     TU_LOG1("Range %d (%d, %d, %d)\r\n", i, (int)rangef.subrange[i].bMin, (int)rangef.subrange[i].bMax, (int)rangef.subrange[i].bRes);
                 }
                 return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &rangef, sizeof(rangef));
-            //    TU_LOG2("    Get Sample Freq. range\r\n");
-            //    return tud_control_xfer(rhport, p_request, &sampleFreqRng, sizeof(sampleFreqRng));
 
             // Unknown/Unsupported control
             default:
@@ -574,11 +530,10 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
             spk_mute[channelNum] = ((audio_control_cur_1_t *) pBuff)->bCur;
 
             // recalculate the gain multiplier for the channel
-            spk_gain[0] =  (spk_mute[0] || spk_mute[1]) ? 0 : q7p24_multiply (gain_table[spk_volume[0]],gain_table[spk_volume[1]]);
-            spk_gain[1] =  (spk_mute[0] || spk_mute[2]) ? 0 : q7p24_multiply (gain_table[spk_volume[0]],gain_table[spk_volume[2]]);
+            spk_gain[0] =  (spk_mute[0] || spk_mute[1]) ? 0 : mul_8p24x8p24 (gain_table[spk_volume[0]],gain_table[spk_volume[1]]);
+            spk_gain[1] =  (spk_mute[0] || spk_mute[2]) ? 0 : mul_8p24x8p24 (gain_table[spk_volume[0]],gain_table[spk_volume[2]]);
 
             TU_LOG2("    Set speaker Mute: %d of channel: %u \r\n", spk_mute[channelNum], channelNum);
-            ESP_LOGI(TAG,"    Set speaker Mute: %d of channel: %u (%s)", spk_mute[channelNum], channelNum, CHNL_STR(channelNum));
 
             return true;
 
@@ -588,22 +543,13 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 
             spk_volume[channelNum] = ((audio_control_cur_2_t *) pBuff)->bCur;
 
-            //ESP_LOGI(TAG,"spk_volume[%d] = %d ", channelNum, spk_volume[channelNum]);
             int spk_volume_db = spk_volume[channelNum] / 256; // Convert to dB
-            //int volume = (spk_volume_db + 50) * 2; // Map to range 0 to 100
             int volume = (spk_volume_db + 40) / 2; // gain table is -40dB to +40dB in steps of 2dB; vol change request should also be in steps of 2dB
             spk_volume[channelNum] = volume;
-            //ESP_LOGI(TAG,"spk_volume[%d] = %d ", channelNum, spk_volume[channelNum]);
-            // recalculate the gain multiplier for the channel
-            //spk_gain[0] =  (spk_mute[0] || spk_mute[1]) ? 0 : q15_multiply (percent_table[spk_volume[0]],percent_table[spk_volume[1]]);
-            //spk_gain[1] =  (spk_mute[0] || spk_mute[2]) ? 0 : q15_multiply (percent_table[spk_volume[0]],percent_table[spk_volume[2]]);
-            spk_gain[0] =  (spk_mute[0] || spk_mute[1]) ? 0 : q7p24_multiply (gain_table[spk_volume[0]],gain_table[spk_volume[1]]);
-            spk_gain[1] =  (spk_mute[0] || spk_mute[2]) ? 0 : q7p24_multiply (gain_table[spk_volume[0]],gain_table[spk_volume[2]]);
+            spk_gain[0] =  (spk_mute[0] || spk_mute[1]) ? 0 : mul_8p24x8p24 (gain_table[spk_volume[0]],gain_table[spk_volume[1]]);
+            spk_gain[1] =  (spk_mute[0] || spk_mute[2]) ? 0 : mul_8p24x8p24 (gain_table[spk_volume[0]],gain_table[spk_volume[2]]);
 
-            //TU_LOG2("Set speaker channel %d volume: %d dB (gains: %d, %d)\r\n", channelNum, spk_volume_db, spk_gain[0], spk_gain[1]);
-            //ESP_LOGI(TAG,"Set speaker channel %d (%s) volume: %d dB (gains: %d, %d)", channelNum, CHNL_STR(channelNum), spk_volume_db, spk_gain[0], spk_gain[1]);
-
-            //TU_LOG2("    Set Volume: %d dB of channel: %u\r\n", volume[channelNum], channelNum);
+            TU_LOG2("    Set Volume: %d dB of channel: %u\r\n", volume[channelNum], channelNum);
             return true;
 
         // Unknown/Unsupported control
@@ -621,11 +567,11 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
             mic_mute[channelNum] = ((audio_control_cur_1_t *) pBuff)->bCur;
 
             // recalculate the gain multiplier for the channel
-            mic_gain[0] =  (mic_mute[0] || mic_mute[1]) ? 0 : q7p24_multiply (gain_table[mic_volume[0]],gain_table[mic_volume[1]]);
-            mic_gain[1] =  (mic_mute[0] || mic_mute[2]) ? 0 : q7p24_multiply (gain_table[mic_volume[0]],gain_table[mic_volume[2]]);
+            mic_gain[0] =  (mic_mute[0] || mic_mute[1]) ? 0 : mul_8p24x8p24 (gain_table[mic_volume[0]],gain_table[mic_volume[1]]);
+            mic_gain[1] =  (mic_mute[0] || mic_mute[2]) ? 0 : mul_8p24x8p24 (gain_table[mic_volume[0]],gain_table[mic_volume[2]]);
             TU_LOG2("    Set mic Mute: %d of channel: %u\r\n", mic_mute[channelNum], channelNum);
-            ESP_LOGI(TAG,"    Set mic Mute: %d of channel: %u (%s)", mic_mute[channelNum], channelNum, CHNL_STR(channelNum));
-            ESP_LOGI(TAG,"     mic_gain: %ld, %ld", mic_gain[0],mic_gain[1]);
+            //ESP_LOGI(TAG,"    Set mic Mute: %d of channel: %u (%s)", mic_mute[channelNum], channelNum, CHNL_STR(channelNum));
+            //ESP_LOGI(TAG,"     mic_gain: %ld, %ld", mic_gain[0],mic_gain[1]);
             return true;
 
         case AUDIO_FU_CTRL_VOLUME:
@@ -633,20 +579,18 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
             TU_VERIFY(p_request->wLength == sizeof(audio_control_cur_2_t));
 
             mic_volume[channelNum] = ((audio_control_cur_2_t *) pBuff)->bCur;
-            //ESP_LOGI(TAG,"mic_volume[%d] = %d ", channelNum, mic_volume[channelNum]);
+
             int mic_volume_db = mic_volume[channelNum] / 256; // Convert to dB
-            //int volume = (mic_volume_db + 50) * 2; // Map to range 0 to 100
+
             int volume = (mic_volume_db + 40) / 2; // gain table is -40dB to +40dB in steps of 2dB; vol change request should also be in steps of 2dB
             mic_volume[channelNum] = volume; 
             // recalculate the gain multiplier for the channel
-            mic_gain[0] =  (mic_mute[0] || mic_mute[1]) ? 0 : q7p24_multiply (gain_table[mic_volume[0]],gain_table[mic_volume[1]]);
-            mic_gain[1] =  (mic_mute[0] || mic_mute[2]) ? 0 : q7p24_multiply (gain_table[mic_volume[0]],gain_table[mic_volume[2]]);
+            mic_gain[0] =  (mic_mute[0] || mic_mute[1]) ? 0 : mul_8p24x8p24 (gain_table[mic_volume[0]],gain_table[mic_volume[1]]);
+            mic_gain[1] =  (mic_mute[0] || mic_mute[2]) ? 0 : mul_8p24x8p24 (gain_table[mic_volume[0]],gain_table[mic_volume[2]]);
 
-            //TU_LOG2("Set microphone channel %d volume: %d dB (%d)\r\n", channelNum, mic_volume_db, volume);
-            //ESP_LOGI(TAG,"Set microphone channel %d (%s) volume: %d dB (%d)", channelNum,CHNL_STR(channelNum), mic_volume_db, mic_volume[channelNum]);
-            ESP_LOGI(TAG,"     mic_gain: %ld, %ld", mic_gain[0],mic_gain[1]);
+            //ESP_LOGI(TAG,"     mic_gain: %ld, %ld", mic_gain[0],mic_gain[1]);
 
-            //TU_LOG2("    Set Volume: %d dB of channel: %u\r\n", volume[channelNum], channelNum);
+            TU_LOG2("    Set Volume: %d dB of channel: %u\r\n", volume[channelNum], channelNum);
             return true;
 
         // Unknown/Unsupported control
@@ -681,11 +625,9 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
                 sampFreq = target_sampFreq;
                 s_spk_bytes_ms = sampFreq / 1000 * s_spk_resolution * CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX/ 8;
                 s_mic_bytes_ms = sampFreq / 1000 * s_mic_resolution * CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX/ 8;
-                //rx_bytes_required = (CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_MS - 1) * s_spk_bytes_ms;
-                //tx_bytes_required = (CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_MS - 1) * s_mic_bytes_ms;
                 TU_LOG1("Mic/Speaker frequency %" PRIu32 ", resolution %d, ch %d", target_sampFreq, s_spk_resolution, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX);
                 ESP_ERROR_CHECK(bsp_i2s_reconfig(sampFreq));
-                //printf("Clock set current freq: %lu Hz, channelNum: %d\n", sampFreq, channelNum);
+
                 ESP_LOGI(TAG,"Mic/Speaker frequency %" PRIu32 ", resolution %d, ch %d", target_sampFreq, s_spk_resolution, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX);
             }
             return true;
@@ -709,20 +651,13 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t itf, uint8_t ep_in, u
     /*** Here to send audio buffer, only use in audio transmission begin ***/
     if(data_in_buf_cnt > 0) {
         tud_audio_write(data_in_buf, data_in_buf_cnt);
+#ifdef DISPLAY_STATS
         mic_bytes_sent_ary[data_in_buf_cnt]++;
+#endif
     }
     else {
         ESP_LOGI(TAG,"tud_audio_tx_done_pre_load_cb: data_in_buf_cnt: %d",data_in_buf_cnt);
     }
-/*
-   static int i = 0;
-   i++;
-   if(i >= 5000 && i< 5050) {
-    printf("data_in_buf\n");
-    for(int j=0; j<data_in_buf_cnt/2; j=j+2)
-        printf("%d\n",(int16_t)*(data_in_buf+j));
-   }
-*/
     return true;
 }
 
@@ -735,15 +670,14 @@ bool tud_audio_tx_done_post_load_cb(uint8_t rhport, uint16_t n_bytes_copied, uin
     (void) cur_alt_setting;
 
     size_t  n_bytes = (*usb_get_data)(data_in_buf, data_in_buf_cnt) ;
-    //assert(data_in_buf_cnt > 0);
+
     if(n_bytes != data_in_buf_cnt)
         ESP_LOGI(TAG,"Requested %d bytes, got %d bytes\n",data_in_buf_cnt,n_bytes );
     //TU_ASSERT((n_bytes == data_in_buf_cnt));
 
-#ifndef I2S_EXTERNAL_LOOPBACK
-//    amp(data_in_buf, data_in_buf_cnt/(2*CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX), mic_gain);
-#endif
+#ifdef DISPLAY_STATS
     mic_bytes_available_ary[n_bytes]++;
+#endif
     return true;
 }
 

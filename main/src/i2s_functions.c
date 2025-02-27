@@ -6,6 +6,7 @@
 #include "tusb.h"
 #include "tusb_config.h"
 #include "esp_task_wdt.h"
+#include "utilities.h"
 
 //#define DUMMY_I2S 1
 
@@ -50,12 +51,13 @@ static i2s_chan_handle_t                rx_handle = NULL;        // I2S rx chann
 
 /*raw buffer to read data from I2S dma buffers*/
 static char rx_sample_buf [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
-//static char rx_sample_buf_1 [CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ];
 static size_t  rx_sample_buflen = 0;// value is set based on sample rate etc. when the i2s is configured 
 
-extern uint8_t s_spk_resolution ;
-
 extern int32_t mic_gain[2];
+extern int32_t spk_gain[2];
+#ifdef DISPLAY_STATS
+extern size_t spk_bytes_available_ary[];
+#endif
 
 esp_err_t bsp_i2s_init(i2s_port_t i2s_num, uint32_t sample_rate)
 {
@@ -134,37 +136,6 @@ esp_err_t bsp_i2s_reconfig(uint32_t sample_rate)
     return ret_val;
 }
 
-int16_t mic_amp(int32_t sig, int32_t gain)
-{
-    int64_t t = (int64_t)sig * (int64_t)gain;
-
-    // sig is assumed to be in 1.31 and gain in 8.24 formats.
-    // Therefore t must be in 9.55 fotmat. To get it back in 1.31, we need to
-    // shift it right by 8 positions. We'll put in a check here so that, we 
-    // want to know if we are losing significant bits. Note that when we pick
-    // upper 16 bits finally for the result, we are effectively shifting the
-    // result down by 48 bits. So altogether, we are scaling the multiplication 
-    // result by 2^-40 
-
-    bool positive = (t>=0);
-
-    for(int i=0; i<8; i++)
-    {
-        t = t<<1;
-        if(positive && (t<0)){
-            printf("mic_amp overflow on positive side\n");
-            return 32767; 
-        } 
-        if(!positive && (t>=0))
-        {
-            printf("mic_amp overflow on -negative side\n");
-            return 32768; 
-        }
-    }
-    int16_t *p = (int16_t*)&t;
-    p += 3;
-    return *p;
-}
 /*
  This filter is an implementation of a 1st-order filter described in 
  https://docs.xilinx.com/v/u/en-US/wp279
@@ -205,17 +176,9 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         }
         //final_value = *left_sample_p - (l_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = (*left_sample_p & BIT_MASK) - (l_offset & BIT_MASK);
-        //*left_sample_p = (final_value >> (32-MIC_RESOLUTION));
-        *left_sample_p = mic_amp(final_value,mic_gain[0]);
+        *left_sample_p = mul_1p31x8p24(final_value,mic_gain[0]);
         l_offset += (*left_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
-        // clip the signal beyond 16-bit range; this essential since we'll keep only 16LSBs
-        /*
-        if(*left_sample_p > 32767)
-            *left_sample_p = 32676;
-        if(*left_sample_p < -32768)
-            *left_sample_p = -32768;
-        */
     }
 
     if(right_sample_p != NULL)
@@ -225,17 +188,9 @@ void decode_and_cancel_offset(int32_t *left_sample_p, int32_t *right_sample_p, b
         }
         //final_value = *right_sample_p - (r_offset & (int32_t)(-1 << (32-MIC_RESOLUTION)));
         final_value = (*right_sample_p & BIT_MASK)  - (r_offset & BIT_MASK);
-        //*right_sample_p = (final_value >> (32-MIC_RESOLUTION));
-        *right_sample_p = mic_amp(final_value,mic_gain[1]);
+        *right_sample_p = mul_1p31x8p24(final_value,mic_gain[1]);
         r_offset += (*right_sample_p) << FILTER_RESPONSE_MULTIPLIER;
 
-        // clip the signal beyond 16-bit range; this essential since we'll keep only 16LSBs
-        /*
-        if(*right_sample_p > 32767)
-            *right_sample_p = 32676;
-        if(*right_sample_p < -32768)
-            *right_sample_p = -32768;
-        */
     }
 }
 
@@ -290,8 +245,8 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 }
 
 #else
-    int t_i2s = 0; static int32_t raw_data[32]; static int32_t processed_data[32]; int k = 0;
-    static int16_t final_data[32];
+//    int t_i2s = 0; static int32_t raw_data[64]; static int32_t processed_data[64]; int k = 0;
+//    static int16_t final_data[64];
 /*
   This function is called by tud_audio_tx_done_post_load_cb(). 
   It reads 32bits raw data for both left and right channels from I2S DMA buffers, 
@@ -301,12 +256,10 @@ size_t bsp_i2s_read(uint16_t *data_buf, size_t count)
 */
 size_t bsp_i2s_read(void *data_buf, size_t count)
 {
-    t_i2s ++;
+    // t_i2s ++;
     int16_t *out_buf = (int16_t*)data_buf;
     static size_t  n_bytes;
     static int32_t d_left, d_right;
-    static int16_t *p_d_l_16b = (int16_t *)&d_left;
-    static int16_t *p_d_r_16b = (int16_t *)&d_right;
 
     int i = 0;
  
@@ -323,21 +276,11 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
                 if((n_bytes - j) >= 8) {
                     memcpy(&d_left,(rx_sample_buf+j),4);
                     memcpy(&d_right,(rx_sample_buf+j+4),4);
-                    if(t_i2s>1000 && t_i2s<1003) raw_data[k] = d_left ;
-                    //I2S_PROCESS_READ_DATA(d_left, d_right);
+                    //if(t_i2s>1000 && t_i2s<1003) raw_data[k] = d_left ;
                     decode_and_cancel_offset(&d_left, &d_right, true); // true: no offset cancelling; just the shifting 
-                    // before we pick the 16 lsb, we need to be sure that the value of d_left fits in 16bits
-                    //if(d_left < -32768) d_left = -32768;
-                    //if(d_left >  32767) d_left =  32767;
-                    //*(out_buf+i)   = *(((int16_t*)&d_left)+1);
-                    //*(out_buf+i)   = *(p_d_l_16b+1);
                     *(out_buf+i)   = d_left;
-                    //*(out_buf+i)   = d_left>>15;
-                    if(t_i2s>1000 && t_i2s<1003) processed_data[k] = d_left;
-                    if(t_i2s>1000 && t_i2s<1003) final_data[k++] = *(out_buf+i);
-                    //*(out_buf+i+1) = *(p_d_r_16b+1);
+                    //if(t_i2s>1000 && t_i2s<1003) final_data[k++] = *(out_buf+i);
                     *(out_buf+i+1) = d_right;
-                    //*(out_buf+i+1) = *(((int16_t*)&d_right)+1);
                     i += 2;
                     j += 8;
                 }
@@ -357,6 +300,7 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
             break;
         }
     } 
+    /*
     if(t_i2s==1003){
         printf("mic_gain: %ld , %ld\n",mic_gain[0], mic_gain[1]);
         for(k=0;k<32;k++){
@@ -364,7 +308,8 @@ size_t bsp_i2s_read(void *data_buf, size_t count)
         printf("%08lx %ld \t %08lx %ld \t %08x %d\n",raw_data[k],raw_data[k],processed_data[k], processed_data[k], final_data[k], final_data[k]);
         }
     }
-    //printf("%d\n",t_i2s);
+    */
+
     if(i*2 < count)
     ESP_LOGI(TAG,"returning %d bytes; was asked for %d bytes",i*2,count);
     return i*2;
@@ -423,6 +368,19 @@ void bsp_i2s_write(void *data_buf, size_t n_bytes){
       }
 }
 
+static void speaker_amp (int16_t *s, size_t nframes, int32_t gain[] ){
+    //int16_t *t = s;
+    if(nframes == 0) return;
+    int32_t sig;
+    for(int i=0; i<nframes; i++){
+        sig = ((int32_t)*s)<<16;
+        *s = mul_1p31x8p24(sig, gain[0]);
+        s++;
+        sig = ((int32_t)*s)<<16;
+        *s = mul_1p31x8p24(sig, gain[1]);
+        s++;
+    }
+}
 
 /* The following function is called by i2s_consumer_func to get data from USB
   to be sent to the I2S transmit DMA buffer.
@@ -474,6 +432,18 @@ void i2s_consumer_func(bool *active){
         //    //vTaskDelay(2);
         //    //continue ;
         }   
+
+        // make sure that data_out_buf_cnt is a multiple of 2*CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX
+        if(data_out_buf_cnt != ((data_out_buf_cnt>>(2*CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX))<<(2*CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)))
+        {
+            ESP_LOGI(TAG,"tud_audio_read returned %d bytes (not multiples of one frame worth bytes)", data_out_buf_cnt);
+        }    
+        speaker_amp((int16_t *)data_out_buf, data_out_buf_cnt/(2*CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX), spk_gain);
+
+#ifdef DISPLAY_STATS
+        spk_bytes_available_ary[data_out_buf_cnt]++;
+#endif
+
         if(data_out_buf_cnt > 0)
             bsp_i2s_write(data_out_buf, data_out_buf_cnt);
     }

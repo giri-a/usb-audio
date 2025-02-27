@@ -1,5 +1,6 @@
 idf_component_register(
-    SRCS main.c debug.c
+    SRCS main.c debug.c 
+         src/utilities.c
          src/blink_led.c 
          src/usb_descriptors.c 
          src/uad_callbacks.c
